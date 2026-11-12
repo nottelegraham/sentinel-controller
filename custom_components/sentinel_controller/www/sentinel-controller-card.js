@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.13";
+const VERSION = "0.2.14";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -987,7 +987,7 @@ class SentinelControllerCard extends HTMLElement {
   p_outlets() {
     const used = this.usedChannels(); const next = this.nextFree("channels", (c) => c.entity || c.name);
     return `<div data-live="override"></div>
-      <div class="toolbar">${next ? this.btn("open", "Add outlet", { kind: "channel", n: next }, "primary", "mdi:plus") : ""}
+      <div class="toolbar">${next && used.length ? this.btn("open", "Add outlet", { kind: "channel", n: next }, "primary", "mdi:plus") : ""}
         <span class="grow"></span><span class="muted">${used.length} of ${this.L.channels} in use</span>
         ${this.btn("override", this.cfg.manual_override ? "Manual override: ON" : "Manual override", {}, this.cfg.manual_override ? "warn" : "ghost", "mdi:hand-back-right-outline")}</div>
       ${this.sec("Sentinel outlets")}
