@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.14";
+const VERSION = "0.2.15";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -923,7 +923,7 @@ class SentinelControllerCard extends HTMLElement {
   }
   _alarmBanner() {
     const al = this.st(["alarms"], []);
-    if (!al.length) return `<div class="banner ok">${this.icon("mdi:check-circle-outline")}<span>All clear — no alarms.</span></div>`;
+    if (!al.length) return "";  // nothing to show: the bell already says all is well
     return `<div class="banner bad list">${al.map((a) => {
       let act = "";
       if (a.reminder) act = this.btn("ack", "Done", { n: a.reminder }, "ghost sm");
