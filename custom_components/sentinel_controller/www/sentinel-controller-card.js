@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.4";
+const VERSION = "0.2.5";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -85,7 +85,7 @@ class SentinelControllerCard extends HTMLElement {
         const dn = {}; devs.forEach((d) => (dn[d.id] = d.name_by_user || d.name));
         this.devs = dn; this.devEnts = {};
         this.reg = {}; ents.forEach((e) => {
-          this.reg[e.entity_id] = { device: dn[e.device_id] || "", device_id: e.device_id, platform: e.platform, hidden: !!(e.hidden_by || e.disabled_by) };
+          this.reg[e.entity_id] = { device: dn[e.device_id] || "", device_id: e.device_id, platform: e.platform, hidden: !!(e.hidden_by || e.disabled_by), category: e.entity_category || "" };
           if (e.device_id && !e.disabled_by) (this.devEnts[e.device_id] = this.devEnts[e.device_id] || []).push(e.entity_id);
         });
       } catch (e) { this.reg = {}; }
@@ -116,6 +116,7 @@ class SentinelControllerCard extends HTMLElement {
   ctrlOutletEnts(devId) {
     return (this.devEnts?.[devId] || []).filter((e) => {
       const st = this._hass.states[e]; if (!st) return false;
+      if (this.reg[e]?.category || /child_lock|_lock$|beeper|_led$|indicator/i.test(e)) return false;  // settings, not outlets
       const dom = e.split(".")[0];
       if (dom === "switch") return true;
       if (dom === "binary_sensor") return /outlet|socket|output/i.test(e) || ["power", "plug", "outlet"].includes(st.attributes?.device_class);

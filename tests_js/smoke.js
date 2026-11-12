@@ -19,13 +19,14 @@ const states = { "switch.kp303_1": { state: "off", attributes: { friendly_name: 
   "sensor.ghl_doser_pump_2_naoh_volume_ml": { state: "23.7", attributes: { unit_of_measurement: "fl. oz." } },
   "sensor.ghl_doser_connection": { state: "Connected", attributes: {} },
   "binary_sensor.ghl_doser_dosing_paused": { state: "off", attributes: {} },
-  "binary_sensor.doser_pump_1_dosing": { state: "on", attributes: {} } };
+  "binary_sensor.doser_pump_1_dosing": { state: "on", attributes: {} },
+  "switch.hydros_control_x2_child_lock": { state: "off", attributes: { friendly_name: "Child lock" } } };
 const hass = { states, services: { notify: { pushover: {} } },
   callWS: async (m) => { calls.push(m);
     if (m.type === "sentinel_controller/get") return fx;
     if (m.type === "config/entity_registry/list") return [{ entity_id: "switch.kp303_1", device_id: "d1", platform: "tplink" }, { entity_id: "sensor.t", device_id: "d2", platform: "mqtt" },
       { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_1", device_id: "d2", platform: "mqtt" }, { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_2", device_id: "d2", platform: "mqtt" },
-      { entity_id: "switch.hydros_control_x2_100l_heat", device_id: "d3", platform: "mqtt" },
+      { entity_id: "switch.hydros_control_x2_100l_heat", device_id: "d3", platform: "mqtt" }, { entity_id: "switch.hydros_control_x2_child_lock", device_id: "d3", platform: "mqtt", entity_category: "config" },
       ...["sensor.ghl_doser_calcium_volume", "sensor.ghl_doser_calcium_state", "sensor.ghl_doser_pump_1_calcium_volume_ml", "sensor.ghl_doser_naoh_volume", "sensor.ghl_doser_pump_2_naoh_volume_ml", "sensor.ghl_doser_connection", "binary_sensor.ghl_doser_dosing_paused"].map((e) => ({ entity_id: e, device_id: "d4", platform: "mqtt" }))];
     if (m.type === "config/device_registry/list") return [{ id: "d1", name: "Kasa KP303" }, { id: "d2", name: "Main Reef GHL IM100" }, { id: "d3", name: "HYDROS Control X2" }, { id: "d4", name: "GHL Doser" }];
     if (m.type === "sentinel_controller/preview") return { out: true, reason: "temperature" };
@@ -98,6 +99,7 @@ const sleep = (t = 10) => new Promise((r) => setTimeout(r, t));
   const pg = q(".page").textContent;
   if (!pg.includes("Main Reef GHL IM100") || !pg.includes("HYDROS Control X2") || !pg.includes("Outlet 1") || !pg.includes("100L heat")) errs.push("controller outlets missing");
   if (!pg.includes("read-only")) errs.push("GHL outlets not marked read-only");
+  if (pg.includes("Child lock")) errs.push("settings switch shown as an outlet");
   const ad = q('[data-act="adopt"][data-e="switch.hydros_control_x2_100l_heat"]');
   if (!ad) errs.push("no Control with Sentinel button for HYDROS"); else { ad.click(); await sleep(30); if (el.drawer?.draft.entity !== "switch.hydros_control_x2_100l_heat") errs.push("adopt did not prefill"); el.drawer.dirty = false; await el._closeDrawer(); }
   if (q('[data-act="adopt"][data-e^="binary_sensor"]')) errs.push("read-only outlet offered for control");
