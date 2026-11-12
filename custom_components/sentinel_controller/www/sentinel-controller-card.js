@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.3";
+const VERSION = "0.2.4";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -16,6 +16,7 @@ const TABS = [
   ["schedules", "Schedules", "mdi:calendar-clock"],
   ["modes", "Feed & Maintenance", "mdi:fish"],
   ["water", "Water", "mdi:waves-arrow-up"],
+  ["dosers", "Dosers", "mdi:beaker-outline"],
   ["logic", "Logic", "mdi:gate-and"],
   ["alerts", "Alerts", "mdi:bell-outline"],
   ["setup", "Setup", "mdi:cog-outline"],
@@ -121,6 +122,60 @@ class SentinelControllerCard extends HTMLElement {
       return false;
     }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }
+  // ---- dosers: any device with "pump_<n>_<name>_volume_ml" sensors (GHL Doser 2.1 / Maxi via the bridge)
+  dosers() {
+    const out = [];
+    for (const [devId, ents] of Object.entries(this.devEnts || {})) {
+      const pumps = [];
+      for (const e of ents) {
+        const m = /^sensor\.(.+)_pump_(\d+)_(.+)_volume_ml$/.exec(e); if (!m) continue;
+        const [, prefix, n, slug] = m;
+        const find = (suffix) => ents.find((x) => x === `sensor.${prefix}_${slug}_${suffix}`);
+        const dosing = Object.keys(this._hass.states).find((x) => x.startsWith("binary_sensor.") && new RegExp(`pump_${n}_.*dosing|pump_${n}_dosing`).test(x) && /doser/.test(x));
+        pumps.push({ n: Number(n), slug, vol: e, pct: find("volume"), state: find("state"), dosing });
+      }
+      if (!pumps.length) continue;
+      pumps.sort((a, b) => a.n - b.n);
+      const pick = (re) => ents.find((x) => re.test(x));
+      out.push({ device_id: devId, name: this.devs[devId] || "Doser", pumps,
+        conn: pick(/^sensor\..*_connection$/), wd: pick(/^sensor\..*_watchdog$/), age: pick(/^sensor\..*_live_data_age$/), paused: pick(/^binary_sensor\..*dosing_paused$/) });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  pumpName(d, p) {
+    const src = p.pct || p.state || p.vol; let n = this.ename(src);
+    if (n.toLowerCase().startsWith(d.name.toLowerCase() + " ")) n = n.slice(d.name.length + 1);
+    n = n.replace(/\s*(volume|state)(\s*ml)?$/i, "").replace(/^pump \d+\s*/i, "");
+    return n || p.slug.replace(/_/g, " ");
+  }
+  pumpCard(d, p) {
+    return `<div class="card pump" data-live="pump:${esc(d.device_id)}:${p.n}"></div>`;
+  }
+  _pumpLive(devId, n) {
+    const d = this.dosers().find((x) => x.device_id === devId); const p = d?.pumps.find((x) => x.n === Number(n)); if (!p) return "";
+    const S = this._hass.states;
+    const pct = parseFloat(S[p.pct]?.state);
+    const raw = parseFloat(S[p.vol]?.state), unit = S[p.vol]?.attributes?.unit_of_measurement || "";
+    const ml = isNaN(raw) ? null : /oz/i.test(unit) ? raw * 29.5735 : /^l$/i.test(unit) ? raw * 1000 : raw;
+    const vol = ml == null ? "—" : ml >= 1000 ? `${(ml / 1000).toFixed(2)} L` : `${Math.round(ml)} mL`;
+    const lvl = isNaN(pct) ? 0 : Math.max(0, Math.min(100, pct));
+    const colors = ["#4f8fc9", "#e0a030", "#4fa39b", "#b06fae", "#8a7a5c", "#3fa0d8", "#7a8fd0", "#c56b5a"];
+    const fill = isNaN(pct) ? "#c9d4de" : pct < 15 ? "#d9312b" : pct < 30 ? "#e8a317" : colors[(p.n - 1) % colors.length];
+    const st = S[p.state]?.state; const dosing = p.dosing && S[p.dosing]?.state === "on";
+    const chips = [dosing ? `<span class="chip info">${this.icon("mdi:water-pump")}Dosing</span>` : "",
+      st && st !== "Normal" ? `<span class="chip warn">${esc(st)}</span>` : "",
+      !isNaN(pct) && pct < 15 ? `<span class="chip bad">Refill</span>` : !isNaN(pct) && pct < 30 ? `<span class="chip warn">Low</span>` : ""].join("");
+    return `<div class="tank" aria-hidden="true"><i style="height:${lvl}%;background:${fill}"></i></div>
+      <div class="pinfo"><span class="cap">Pump ${p.n}</span><b>${esc(this.pumpName(d, p))}</b>
+      <div class="pvol"><span class="big sm">${isNaN(pct) ? "—" : Math.round(pct) + "%"}</span><span class="muted">${vol}</span></div><div class="chips">${chips}</div></div>`;
+  }
+  doserHead(d) {
+    const S = this._hass.states;
+    const conn = S[d.conn]?.state, wd = S[d.wd]?.state, paused = S[d.paused]?.state === "on";
+    const ok = (!d.conn || conn === "Connected") && (!d.wd || wd === "OK");
+    return `${ok ? `<span class="chip ok">Online</span>` : `<span class="chip bad">${esc(conn || wd || "Offline")}</span>`}${paused ? `<span class="chip warn">Dosing paused</span>` : ""}`;
+  }
+
   shortName(e, dev) { const n = this.ename(e); return n.toLowerCase().startsWith(dev.toLowerCase() + " ") ? n.slice(dev.length + 1) : n; }
   ctrlCandidates() {
     return Object.keys(this.devEnts || {}).filter((id) => this.ctrlOutletEnts(id).length)
@@ -710,6 +765,8 @@ class SentinelControllerCard extends HTMLElement {
       case "lvl": return this._lvlLive(this.item("level_circuits", a));
       case "sens": { const s = this.item("level_sensors", a); const v = this.st(["level_sensors", a]); return s?.entity ? (v == null ? `<span class="chip warn">No data</span>` : v ? `<span class="chip info">${this.icon("mdi:water")}Water</span>` : `<span class="chip">${this.icon("mdi:water-off-outline")}Dry</span>`) : ""; }
       case "gate": return this.pill(this.st(["logic", a]));
+      case "pump": { const j = a.lastIndexOf(":"); return this._pumpLive(a.slice(0, j), a.slice(j + 1)); }
+      case "doserhead": { const d = this.dosers().find((x) => x.device_id === a); return d ? this.doserHead(d) : ""; }
       case "ent": { const st = this._hass.states[a]; return st ? (["on", "off"].includes(st.state) ? this.pill(st.state === "on") : `<span class="chip warn">${esc(st.state)}</span>`) : `<span class="chip bad">missing</span>`; }
       case "tl": { const [sec, n] = a.split("-"); const x = this.item(sec, n); return x ? this.timeline(x.entries, x.mode === "event" ? "event" : "normal", sec === "illumination" ? x.color : "#0069b4") : ""; }
       case "tmr": { const t = this.item("timers", a); return t?.mode === "normal" ? this.pill(this.st(["timers", a])) : `<span class="chip">Events</span>`; }
@@ -816,6 +873,7 @@ class SentinelControllerCard extends HTMLElement {
       ${this.sec("Outlets", this.btn("goto", "Manage", { to: "outlets" }, "link"))}
       <div class="grid g3">${outs.map((c) => this._outletCard(c)).join("") || this.empty("mdi:power-socket-us", "No outlets yet", "Pick any switch or smart plug and choose what it does.", nextCh ? this.btn("goto", "Add an outlet", { to: "outlets", kind: "channel", n: nextCh }, "primary") : "")}</div>
       ${this.controllers().map((c) => this.ctrlSection(c)).join("")}
+      ${this.dosers().map((d) => `${this.sec(d.name, `<span class="hdrchips" data-live="doserhead:${esc(d.device_id)}"></span>`)}<div class="grid g4 dense">${d.pumps.map((p) => this.pumpCard(d, p)).join("")}</div>`).join("")}
       ${water ? `${this.sec("Water", this.btn("goto", "Manage", { to: "water" }, "link"))}<div class="grid g3">${water}</div>` : ""}`;
   }
   _outletCard(c) {
@@ -882,6 +940,13 @@ class SentinelControllerCard extends HTMLElement {
       <div class="grid g2">${cs.map((c) => `<div class="card lvl"><button type="button" class="lh" data-act="open" data-kind="circuit" data-n="${c.n}">${this.icon(LEVEL[c.mode].icon, "ic")}<div><b>${esc(c.name || LEVEL[c.mode].label)}</b><small>${esc(LEVEL[c.mode].label)} · ${esc([c.sensor1, c.sensor2].filter(Number).map((n) => this.item("level_sensors", n)?.name || "sensor " + n).join(" / "))}</small></div>${this.icon("mdi:chevron-right", "muted")}</button><div data-live="lvl:${c.n}"></div></div>`).join("") || this.empty("mdi:waves-arrow-up", "No circuits", ss.length ? "ATO, water changes and leak shutoff." : "ATO, water changes and leak shutoff. Add your sensors below first.", ss.length && nc ? this.btn("open", "New circuit", { kind: "circuit", n: nc }, "primary", "mdi:plus") : "")}</div>
       ${this.sec("Sensors", ns ? this.btn("open", "Add sensor", { kind: "lsensor", n: ns }, "link", "mdi:plus") : "")}
       <div class="grid g3">${ss.map((s) => `<button type="button" class="card sens" data-act="open" data-kind="lsensor" data-n="${s.n}"><div><span class="cap">Sensor ${s.n}${this.edev(s.entity) ? " · " + esc(this.edev(s.entity)) : ""}</span><b>${esc(s.name || this.ename(s.entity))}</b></div><span data-live="sens:${s.n}"></span></button>`).join("") || this.empty("mdi:water-outline", "No sensors", "Floats, optical sensors and leak sensors from any controller.", ns ? this.btn("open", "Add sensor", { kind: "lsensor", n: ns }, "primary", "mdi:plus") : "")}</div>`;
+  }
+  p_dosers() {
+    const ds = this.dosers();
+    if (!ds.length) return this.empty("mdi:beaker-outline", "No dosers found", "Dosers appear here automatically when their pumps are in Home Assistant (for example through your GHL bridge).");
+    return ds.map((d) => `${this.sec(d.name, `<span class="hdrchips" data-live="doserhead:${esc(d.device_id)}"></span>`)}
+      <div class="grid g3">${d.pumps.map((p) => this.pumpCard(d, p)).join("")}</div>`).join("")
+      + `<p class="hint">Container levels and remaining volume come from the doser. Dosing schedules and calibration stay on the doser itself. Colors: red under 15 %, amber under 30 %.</p>`;
   }
   p_logic() {
     const gs = this.cfg.logic.filter((g) => this.gateUsed(g)), ng = this.nextFree("logic", (g) => this.gateUsed(g));
@@ -1035,6 +1100,13 @@ details .fld{border-top:1px solid var(--offb)}details .picker{margin:6px 0}
 .days{display:flex;gap:6px;flex-wrap:wrap}.day{border:1px solid var(--bd);background:var(--card);border-radius:18px;padding:7px 12px;cursor:pointer;font-weight:600;color:var(--sec)}.day.on{background:var(--ac);color:#fff;border-color:var(--ac)}
 .presets{display:flex;gap:14px}.gin{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0}
 .checks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}.chk{display:flex;align-items:center;gap:6px;background:var(--offb);border-radius:8px;padding:6px 10px;cursor:pointer}
+.pump{display:flex;gap:14px;padding:12px 14px;align-items:stretch}
+.tank{width:34px;min-height:78px;border:2px solid #c3d1dd;border-top-width:1px;border-radius:4px 4px 8px 8px;position:relative;overflow:hidden;background:#f4f7fa;flex:none}
+.tank i{position:absolute;left:0;right:0;bottom:0;transition:height .6s}
+.pinfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}.pinfo b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pvol{display:flex;align-items:baseline;gap:8px}.big.sm{font-size:24px}
+.hdrchips{display:inline-flex;gap:6px;text-transform:none;letter-spacing:0}
+.dense .pump{padding:10px 12px}.dense .tank{min-height:64px;width:28px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;background:var(--tx);color:#fff;padding:10px 18px;border-radius:10px;z-index:20;transition:.25s;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:90vw}.toast.in{opacity:1;transform:translate(-50%,0)}.toast.bad{background:var(--bad)}
 @media (max-width:700px){.root{padding:8px}.g2,.g3,.g4{grid-template-columns:1fr}.tab span{display:none}.tab.on span{display:inline}.fld{flex-wrap:wrap}.fc{max-width:100%;width:100%;justify-content:flex-start}input[type=text]{width:100%}.ftiles{grid-template-columns:1fr 1fr}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}

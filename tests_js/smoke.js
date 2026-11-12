@@ -11,14 +11,23 @@ const states = { "switch.kp303_1": { state: "off", attributes: { friendly_name: 
   "binary_sensor.float": { state: "on", attributes: { friendly_name: "Sump float" } },
   "binary_sensor.main_reef_ghl_im100_outlet_1": { state: "off", attributes: { friendly_name: "Main Reef GHL IM100 Outlet 1" } },
   "binary_sensor.main_reef_ghl_im100_outlet_2": { state: "on", attributes: { friendly_name: "Main Reef GHL IM100 Outlet 2" } },
-  "switch.hydros_control_x2_100l_heat": { state: "off", attributes: { friendly_name: "100L heat" } } };
+  "switch.hydros_control_x2_100l_heat": { state: "off", attributes: { friendly_name: "100L heat" } },
+  "sensor.ghl_doser_calcium_volume": { state: "54", attributes: { friendly_name: "GHL Doser Calcium volume", unit_of_measurement: "%" } },
+  "sensor.ghl_doser_calcium_state": { state: "Normal", attributes: { friendly_name: "GHL Doser Calcium state" } },
+  "sensor.ghl_doser_pump_1_calcium_volume_ml": { state: "36.28", attributes: { friendly_name: "GHL Doser Pump 1 Calcium volume ml", unit_of_measurement: "fl. oz." } },
+  "sensor.ghl_doser_naoh_volume": { state: "12", attributes: { friendly_name: "GHL Doser NaOH volume", unit_of_measurement: "%" } },
+  "sensor.ghl_doser_pump_2_naoh_volume_ml": { state: "23.7", attributes: { unit_of_measurement: "fl. oz." } },
+  "sensor.ghl_doser_connection": { state: "Connected", attributes: {} },
+  "binary_sensor.ghl_doser_dosing_paused": { state: "off", attributes: {} },
+  "binary_sensor.doser_pump_1_dosing": { state: "on", attributes: {} } };
 const hass = { states, services: { notify: { pushover: {} } },
   callWS: async (m) => { calls.push(m);
     if (m.type === "sentinel_controller/get") return fx;
     if (m.type === "config/entity_registry/list") return [{ entity_id: "switch.kp303_1", device_id: "d1", platform: "tplink" }, { entity_id: "sensor.t", device_id: "d2", platform: "mqtt" },
       { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_1", device_id: "d2", platform: "mqtt" }, { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_2", device_id: "d2", platform: "mqtt" },
-      { entity_id: "switch.hydros_control_x2_100l_heat", device_id: "d3", platform: "mqtt" }];
-    if (m.type === "config/device_registry/list") return [{ id: "d1", name: "Kasa KP303" }, { id: "d2", name: "Main Reef GHL IM100" }, { id: "d3", name: "HYDROS Control X2" }];
+      { entity_id: "switch.hydros_control_x2_100l_heat", device_id: "d3", platform: "mqtt" },
+      ...["sensor.ghl_doser_calcium_volume", "sensor.ghl_doser_calcium_state", "sensor.ghl_doser_pump_1_calcium_volume_ml", "sensor.ghl_doser_naoh_volume", "sensor.ghl_doser_pump_2_naoh_volume_ml", "sensor.ghl_doser_connection", "binary_sensor.ghl_doser_dosing_paused"].map((e) => ({ entity_id: e, device_id: "d4", platform: "mqtt" }))];
+    if (m.type === "config/device_registry/list") return [{ id: "d1", name: "Kasa KP303" }, { id: "d2", name: "Main Reef GHL IM100" }, { id: "d3", name: "HYDROS Control X2" }, { id: "d4", name: "GHL Doser" }];
     if (m.type === "sentinel_controller/preview") return { out: true, reason: "temperature" };
     if (m.type === "sentinel_controller/save") { fx.config[m.section] = m.value; return { config: fx.config, status: fx.status }; }
     return { config: fx.config, status: fx.status }; },
@@ -96,6 +105,12 @@ const sleep = (t = 10) => new Promise((r) => setTimeout(r, t));
   q('[data-tab="setup"]').click(); await sleep();
   const cc = q('input[data-ctrl="d3"]'); if (!cc || !cc.checked) errs.push("HYDROS not pre-selected"); else { cc.checked = false; cc.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(); q('[data-act="form_save"]').click(); await sleep(30);
     const cs = calls.filter((c) => c.section === "controllers").pop(); if (!cs || cs.value.some((c) => c.device_id === "d3") || !cs.value.some((c) => c.device_id === "d2")) errs.push("controllers save wrong " + JSON.stringify(cs && cs.value)); }
+  // dosers tab
+  q('[data-tab="dosers"]').click(); await sleep();
+  const dt2 = q(".page").textContent;
+  if (!dt2.includes("GHL Doser") || !dt2.includes("Calcium") || !dt2.includes("54%") || !dt2.includes("1.07 L") || !dt2.includes("Dosing") || !dt2.includes("Refill") || !dt2.includes("Online")) errs.push("dosers tab wrong: " + dt2.replace(/\s+/g, " ").slice(0, 300));
+  q('[data-tab="overview"]').click(); await sleep();
+  if (!q(".page").textContent.includes("NaOH")) errs.push("dosers missing on overview");
   // live updates don't throw
   el._onStatus(fx.status); await sleep();
   console.log(errs.length ? "ERRORS:\n" + errs.join("\n") : "SMOKE OK", "| toasts:", toasts.join(" / "));

@@ -5,8 +5,12 @@ from pathlib import Path
 
 import voluptuous as vol
 
+import hashlib
+
+from aiohttp import web
+
 from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -39,7 +43,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
     await hass.http.async_register_static_paths(
         [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "www"), False)])
-    add_extra_js_url(hass, f"{STATIC_URL}/sentinel-controller-card.js?v={CARD_VERSION}")
+    card = Path(__file__).parent / "www" / "sentinel-controller-card.js"
+    digest = await hass.async_add_executor_job(lambda: hashlib.sha1(card.read_bytes()).hexdigest()[:10])
+    hass.http.register_view(CardVersionView(f"{CARD_VERSION}-{digest}"))
+    # The loader URL never changes, so a stale cached page still reaches the current card build.
+    add_extra_js_url(hass, f"{STATIC_URL}/sentinel-controller-loader.js")
     sc_ws.async_register(hass)
 
     async def handle(call: ServiceCall) -> None:
@@ -70,3 +78,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         rt: Runtime = hass.data[DOMAIN].pop("runtime")
         await rt.async_stop()
     return ok
+
+
+class CardVersionView(HomeAssistantView):
+    """Tells the loader which card build is installed (no caching)."""
+
+    url = "/api/sentinel_controller/card_version"
+    name = "api:sentinel_controller:card_version"
+    requires_auth = False
+
+    def __init__(self, version: str) -> None:
+        self._version = version
+
+    async def get(self, request):
+        return web.json_response({"version": self._version}, headers={"Cache-Control": "no-store"})

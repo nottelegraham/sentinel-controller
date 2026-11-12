@@ -92,3 +92,18 @@ async def test_preview(hass, hass_ws_client):
     assert hass.states.get("input_boolean.heater").state == "off"  # preview never switches anything
     assert hass.data[DOMAIN]["runtime"].ctl.config["channels"][4]["fn"]["type"] == "always_off"
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_card_version_endpoint(hass, hass_client):
+    entry = MockConfigEntry(domain=DOMAIN, data={}, title="Sentinel Controller")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    client = await hass_client()
+    r = await client.get("/api/sentinel_controller/card_version")
+    assert r.status == 200 and r.headers.get("Cache-Control") == "no-store"
+    v = (await r.json())["version"]
+    assert "-" in v and len(v.split("-")[1]) == 10
+    r = await client.get("/sentinel_controller_static/sentinel-controller-loader.js")
+    assert r.status == 200 and "card_version" in await r.text()
+    assert await hass.config_entries.async_unload(entry.entry_id)
