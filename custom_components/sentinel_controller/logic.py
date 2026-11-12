@@ -130,6 +130,7 @@ def default_config() -> dict[str, Any]:
         "notify": {"targets": [], "on_new_alarm": True, "on_clear": False, "repeat_min": 0, "daily_at": ""},
         "data_timeout_min": 0,
         "data_source": {"entity": "", "ok_states": "Connected"},
+        "controllers": [],  # [{"device_id", "name"}]; empty = auto-detect in the card
     }
 
 

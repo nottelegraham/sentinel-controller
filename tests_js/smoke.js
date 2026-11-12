@@ -8,12 +8,17 @@ w.eval(fs.readFileSync(process.argv[2], "utf8"));
 const calls = [];
 const states = { "switch.kp303_1": { state: "off", attributes: { friendly_name: "KP303 Socket 1" } }, "switch.heater": { state: "on", attributes: { friendly_name: "Heater" } },
   "sensor.t": { state: "77", attributes: { friendly_name: "Tank temp", unit_of_measurement: "°F" } }, "sensor.ph": { state: "8.6", attributes: { friendly_name: "pH" } },
-  "binary_sensor.float": { state: "on", attributes: { friendly_name: "Sump float" } } };
+  "binary_sensor.float": { state: "on", attributes: { friendly_name: "Sump float" } },
+  "binary_sensor.main_reef_ghl_im100_outlet_1": { state: "off", attributes: { friendly_name: "Main Reef GHL IM100 Outlet 1" } },
+  "binary_sensor.main_reef_ghl_im100_outlet_2": { state: "on", attributes: { friendly_name: "Main Reef GHL IM100 Outlet 2" } },
+  "switch.hydros_control_x2_100l_heat": { state: "off", attributes: { friendly_name: "100L heat" } } };
 const hass = { states, services: { notify: { pushover: {} } },
   callWS: async (m) => { calls.push(m);
     if (m.type === "sentinel_controller/get") return fx;
-    if (m.type === "config/entity_registry/list") return [{ entity_id: "switch.kp303_1", device_id: "d1", platform: "tplink" }, { entity_id: "sensor.t", device_id: "d2", platform: "mqtt" }];
-    if (m.type === "config/device_registry/list") return [{ id: "d1", name: "Kasa KP303" }, { id: "d2", name: "Main Reef GHL IM100" }];
+    if (m.type === "config/entity_registry/list") return [{ entity_id: "switch.kp303_1", device_id: "d1", platform: "tplink" }, { entity_id: "sensor.t", device_id: "d2", platform: "mqtt" },
+      { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_1", device_id: "d2", platform: "mqtt" }, { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_2", device_id: "d2", platform: "mqtt" },
+      { entity_id: "switch.hydros_control_x2_100l_heat", device_id: "d3", platform: "mqtt" }];
+    if (m.type === "config/device_registry/list") return [{ id: "d1", name: "Kasa KP303" }, { id: "d2", name: "Main Reef GHL IM100" }, { id: "d3", name: "HYDROS Control X2" }];
     if (m.type === "sentinel_controller/preview") return { out: true, reason: "temperature" };
     if (m.type === "sentinel_controller/save") { fx.config[m.section] = m.value; return { config: fx.config, status: fx.status }; }
     return { config: fx.config, status: fx.status }; },
@@ -79,6 +84,18 @@ const sleep = (t = 10) => new Promise((r) => setTimeout(r, t));
   const go = q('[data-act="goto"][data-kind]');
   if (!go) errs.push("no goto-with-editor button on overview"); else { go.click(); await sleep(30); if (!q(".drawer")) errs.push("goto did not open the editor"); el.drawer.dirty = false; await el._closeDrawer(); }
   if (sr.querySelector('[data-act="goto"][data-tab]')) errs.push("goto button carries data-tab");
+  // controller outlets: GHL (read-only) + HYDROS (adoptable) on the Outlets tab
+  q('[data-tab="outlets"]').click(); await sleep();
+  const pg = q(".page").textContent;
+  if (!pg.includes("Main Reef GHL IM100") || !pg.includes("HYDROS Control X2") || !pg.includes("Outlet 1") || !pg.includes("100L heat")) errs.push("controller outlets missing");
+  if (!pg.includes("read-only")) errs.push("GHL outlets not marked read-only");
+  const ad = q('[data-act="adopt"][data-e="switch.hydros_control_x2_100l_heat"]');
+  if (!ad) errs.push("no Control with Sentinel button for HYDROS"); else { ad.click(); await sleep(30); if (el.drawer?.draft.entity !== "switch.hydros_control_x2_100l_heat") errs.push("adopt did not prefill"); el.drawer.dirty = false; await el._closeDrawer(); }
+  if (q('[data-act="adopt"][data-e^="binary_sensor"]')) errs.push("read-only outlet offered for control");
+  // setup: controllers chooser saves an explicit list
+  q('[data-tab="setup"]').click(); await sleep();
+  const cc = q('input[data-ctrl="d3"]'); if (!cc || !cc.checked) errs.push("HYDROS not pre-selected"); else { cc.checked = false; cc.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(); q('[data-act="form_save"]').click(); await sleep(30);
+    const cs = calls.filter((c) => c.section === "controllers").pop(); if (!cs || cs.value.some((c) => c.device_id === "d3") || !cs.value.some((c) => c.device_id === "d2")) errs.push("controllers save wrong " + JSON.stringify(cs && cs.value)); }
   // live updates don't throw
   el._onStatus(fx.status); await sleep();
   console.log(errs.length ? "ERRORS:\n" + errs.join("\n") : "SMOKE OK", "| toasts:", toasts.join(" / "));
