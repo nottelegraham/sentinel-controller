@@ -60,8 +60,18 @@ const OPS = {
   delayed_on: { label: "Delayed ON", desc: "Turns on only after the input has been on for the duration; turns off at once." },
   delayed_off: { label: "Delayed OFF", desc: "Turns on at once; stays on for the duration after the input goes off." },
 };
-// integrations whose switches are smart plugs or power-strip sockets
-const PLUG_PLATFORMS = ["tplink", "kasa", "tapo", "shelly", "wemo", "tuya", "localtuya", "tuya_local", "meross_lan", "meross_cloud", "sonoff", "tasmota"];
+// Integrations whose devices are reef controllers (outputs = outlets)
+const CTRL_PLATFORMS = ["apex", "apex_fusion", "neptune_apex", "reef_pi", "hydros", "ghl", "profilux"];
+// Reef controllers recognised by model, maker or name (gear that arrives through MQTT bridges)
+const CTRL_RE = /ghl|profilux|hydros control|neptune|coralvue|reef-?pi/i;
+// …and by device name, but only for MQTT devices (bridges such as neptuneapex-hass-mqtt)
+const CTRL_NAME_RE = /ghl|profilux|hydros control|apex|neptune|reef-?pi/i;
+// Integrations whose switches are smart plugs or power-strip sockets
+const PLUG_PLATFORMS = ["tplink", "kasa", "tapo", "shelly", "wemo", "tuya", "localtuya", "tuya_local", "meross_lan", "meross_cloud", "sonoff", "tasmota", "switchbot", "govee", "vesync", "eufy"];
+// "plug / socket / outlet / power strip" in the languages Home Assistant users most often run
+const PLUG_RE = /plug|socket|outlet|power ?strip|steckdose|stecker|prise|enchufe|regleta|presa|ciabatta|stopcontact|contactdoos|gniazd|tomada|uttag|stikkontakt|pistorasia|zásuvka|розетк|コンセント|插座/i;
+// Not outlets even when they have a switch: wall switches, dimmers, lights
+const NOT_PLUG_RE = /light ?switch|wall ?switch|dimmer|in-?wall|lichtschalter|interrupteur/i;
 const LEVEL_TYPES = ["fill_water", "fill_ato", "fill_awc", "drain_water"];
 
 class SentinelControllerCard extends HTMLElement {
@@ -121,9 +131,16 @@ class SentinelControllerCard extends HTMLElement {
       if (this.reg[e]?.category || /child_lock|_lock$|beeper|_led$|indicator/i.test(e)) return false;  // settings, not outlets
       const dom = e.split(".")[0];
       if (dom === "switch") return true;
+      if (dom === "select") return this.isOutletSelect(e);
       if (dom === "binary_sensor") return /outlet|socket|output/i.test(e) || ["power", "plug", "outlet"].includes(st.attributes?.device_class);
       return false;
     }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }
+  // an Apex-style outlet: a select whose options include On and Off (usually Off / Auto / On)
+  isOutletSelect(e) {
+    if (/power_on|restore|behavio|indicator|backlight|_led|light_mode/i.test(e)) return false;  // plug settings, not outlets
+    const o = (this._hass.states[e]?.attributes?.options || []).map((x) => String(x).trim().toLowerCase());
+    return o.includes("on") && o.includes("off") && o.includes("auto");
   }
   // ---- dosers: any device with "pump_<n>_<name>_volume_ml" sensors (GHL Doser 2.1 / Maxi via the bridge)
   dosers() {
@@ -185,11 +202,20 @@ class SentinelControllerCard extends HTMLElement {
   // else with a switch (cars, appliances, power stations, pumps, wall light switches). Only the first two
   // are offered by default; the rest stay one click away.
   srcKind(id) {
-    const info = this.devInfo?.[id] || {}; const text = `${this.devs?.[id] || ""} ${info.model} ${info.mfr}`;
-    const ents = this.ctrlOutletEnts(id);
-    if (/ghl|profilux|hydros control|apex|neptune|coralvue/i.test(`${info.model} ${info.mfr}`) || (/ghl|profilux|hydros control|apex|neptune/i.test(text) && ents.some((e) => this.reg[e]?.platform === "mqtt"))) return "controller";
-    if (/light ?switch|dimmer|wall switch/i.test(info.model)) return "other";
-    if (ents.some((e) => PLUG_PLATFORMS.includes(this.reg[e]?.platform) || this._hass.states[e]?.attributes?.device_class === "outlet" || /socket|outlet|plug/i.test(e))) return "strip";
+    const fix = (this.forms?.setup?.draft?.source_kinds || this.cfg.source_kinds || {})[id]; if (fix) return fix;
+    return this.guessKind(id);
+  }
+  // Best guess from what Home Assistant knows about the device, strongest clue first.
+  guessKind(id) {
+    const info = this.devInfo?.[id] || {}, name = this.devs?.[id] || "";
+    const ents = this.ctrlOutletEnts(id), plat = ents.map((e) => this.reg[e]?.platform);
+    if (plat.some((p) => CTRL_PLATFORMS.includes(p)) || ents.some((e) => e.startsWith("select."))) return "controller";
+    if (CTRL_RE.test(`${info.model} ${info.mfr}`)) return "controller";
+    if (CTRL_NAME_RE.test(name) && plat.some((p) => p === "mqtt")) return "controller";
+    if (NOT_PLUG_RE.test(info.model)) return "other";
+    if (ents.some((e) => this._hass.states[e]?.attributes?.device_class === "outlet")) return "strip";
+    if (plat.some((p) => PLUG_PLATFORMS.includes(p))) return "strip";
+    if (PLUG_RE.test(`${info.model} ${name}`) || ents.some((e) => PLUG_RE.test(`${e} ${this.ename(e)}`))) return "strip";
     return "other";
   }
   ctrlCandidates() {
@@ -286,7 +312,7 @@ class SentinelControllerCard extends HTMLElement {
 
   // entity picker — search filters in place, no re-render
   picker(path, cur, domains, emptyLabel = "Choose a device…", numeric = false) {
-    const list = Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0]) && (!numeric || e === cur || !isNaN(parseFloat(this._hass.states[e].state))))
+    const list = Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0]) && (!e.startsWith("select.") || this.isOutletSelect(e)) && (!numeric || e === cur || !isNaN(parseFloat(this._hass.states[e].state))))
       .sort((a, b) => (this.edev(a) ? 0 : 1) - (this.edev(b) ? 0 : 1) || this.edev(a).localeCompare(this.edev(b)) || this.ename(a).localeCompare(this.ename(b)));
     const sub = (e) => { const d = this.edev(e); return esc([d && !this.ename(e).toLowerCase().startsWith(d.toLowerCase()) ? d : "", e].filter(Boolean).join(" · ")); };
     const sel = cur ? `<div class="pk-cur">${this.icon("mdi:check-circle", "okc")}<div><b>${esc(this.ename(cur))}</b><small>${sub(cur)}</small></div><span class="st">${esc(this._hass.states[cur]?.state ?? "missing")}</span></div>` : `<div class="pk-cur none">${esc(emptyLabel)}</div>`;
@@ -326,6 +352,14 @@ class SentinelControllerCard extends HTMLElement {
       const F = this.forms.setup; const list = F.draft.controllers.filter((c) => c.device_id !== el.dataset.ctrl);
       if (el.checked) list.push({ device_id: el.dataset.ctrl, name: el.dataset.name });
       F.draft.controllers = list; F.dirty = true; return this._render();
+    }
+    if (el.dataset?.kind !== undefined && el.classList.contains("kindsel")) {
+      if (!committed) return;
+      const F = this.forms.setup; const k = { ...(F.draft.source_kinds || {}) }; const id = el.dataset.kind;
+      if (el.value === this.guessKind(id)) delete k[id]; else k[id] = el.value;
+      F.draft.source_kinds = k; F.dirty = true;
+      if (el.value === "other") this.showOtherSrc = true;
+      return this._render();
     }
     if (el.dataset?.ctrlout !== undefined) {
       if (!committed) return;
@@ -402,6 +436,7 @@ class SentinelControllerCard extends HTMLElement {
       }
       case "manual": return run("channel_manual", ds.n, ds.v === "on");
       case "other_src": this.showOtherSrc = !this.showOtherSrc; return this._render();
+      case "edit_kinds": this.editKinds = !this.editKinds; if (this.editKinds) this.showOtherSrc = true; return this._render();
       case "adopt": {
         const n = this.nextFree("channels", (c) => c.entity || c.name);
         if (!n) return this._toast("All 48 outlets are in use.", true);
@@ -564,7 +599,7 @@ class SentinelControllerCard extends HTMLElement {
     const s = this.st(["channels", d.n], {});
     return `
       ${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Heater" }))}
-      <div class="lbl">Device it switches</div>${this.picker("entity", d.entity, ["switch", "light", "fan", "input_boolean", "siren", "humidifier"], "Choose a plug, outlet or relay from any controller…")}
+      <div class="lbl">Device it switches</div>${this.picker("entity", d.entity, ["switch", "light", "fan", "input_boolean", "siren", "humidifier", "select"], "Choose a plug, outlet or relay from any controller…")}
       ${this._conflictNote(d)}
       <div class="lbl">What should it do?</div><div class="ftiles">${tiles}</div>
       <div class="detail">${this._fnDetail(d.fn, "fn")}</div>
@@ -760,7 +795,7 @@ class SentinelControllerCard extends HTMLElement {
 
   // ------------------------------------------------------------------ page forms
   form(name, sections) {
-    if (!this.forms[name]) { const draft = {}; sections.forEach((s) => (draft[s] = clone(this.cfg[s]))); this.forms[name] = { draft, sections, dirty: false }; }
+    if (!this.forms[name]) { const draft = {}; sections.forEach((s) => (draft[s] = this.cfg[s] === undefined ? undefined : clone(this.cfg[s]))); this.forms[name] = { draft, sections, dirty: false }; }
     return this.forms[name].draft;
   }
   _formBar(name) { const el = this.shadowRoot.querySelector(`[data-formbar="${name}"]`); if (el) el.outerHTML = this.formBar(name); }
@@ -793,7 +828,8 @@ class SentinelControllerCard extends HTMLElement {
       case "gate": return this.pill(this.st(["logic", a]));
       case "pump": { const j = a.lastIndexOf(":"); return this._pumpLive(a.slice(0, j), a.slice(j + 1)); }
       case "doserhead": { const d = this.dosers().find((x) => x.device_id === a); return d ? this.doserHead(d) : ""; }
-      case "ent": { const st = this._hass.states[a]; return st ? (["on", "off"].includes(st.state) ? this.pill(st.state === "on") : `<span class="chip warn">${esc(st.state)}</span>`) : `<span class="chip bad">missing</span>`; }
+      case "ent": { const st = this._hass.states[a]; if (!st) return `<span class="chip bad">missing</span>`; const v = String(st.state).toLowerCase();
+        return ["on", "off"].includes(v) ? this.pill(v === "on") : ["unavailable", "unknown"].includes(v) ? `<span class="chip warn">${esc(st.state)}</span>` : `<span class="chip">${esc(st.state)}</span>`; }
       case "tl": { const [sec, n] = a.split("-"); const x = this.item(sec, n); return x ? this.timeline(x.entries, x.mode === "event" ? "event" : "normal", sec === "illumination" ? x.color : "#0069b4") : ""; }
       case "tmr": { const t = this.item("timers", a); return t?.mode === "normal" ? this.pill(this.st(["timers", a])) : `<span class="chip">Events</span>`; }
       case "lgt": return this.pill(this.st(["illumination", a]));
@@ -1005,13 +1041,15 @@ class SentinelControllerCard extends HTMLElement {
       const saved = F.controllers.find((x) => x.device_id === c.device_id), pick = new Set(saved && Array.isArray(saved.outlets) ? saved.outlets : ents);
       const n = on ? ents.filter((e) => pick.has(e)).length : ents.length;
       const subs = on && ents.length > 1 ? `<div class="checks sub">${ents.map((e) => `<label class="chk"><input type="checkbox" data-ctrlout="${esc(e)}" data-dev="${esc(c.device_id)}" ${pick.has(e) ? "checked" : ""}><span>${esc(this.shortName(e, c.name))}</span></label>`).join("")}</div>` : "";
-      return `<div class="src"><label class="chk"><input type="checkbox" data-ctrl="${esc(c.device_id)}" data-name="${esc(c.name)}" ${on ? "checked" : ""}><span>${esc(c.name)} <small class="muted">${n}${on && n !== ents.length ? " of " + ents.length : ""}</small></span></label>${subs}</div>`;
+      const fixer = this.editKinds ? `<select class="kindsel" data-kind="${esc(c.device_id)}" aria-label="Group for ${esc(c.name)}">${[["controller", "Reef controller"], ["strip", "Power strip or plug"], ["other", "Other device"]].map(([k, l]) => `<option value="${k}" ${c.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>` : "";
+      return `<div class="src"><div class="srow"><label class="chk"><input type="checkbox" data-ctrl="${esc(c.device_id)}" data-name="${esc(c.name)}" ${on ? "checked" : ""}><span>${esc(c.name)} <small class="muted">${n}${on && n !== ents.length ? " of " + ents.length : ""}</small></span></label>${fixer}</div>${subs}</div>`;
     }).join("");
     return `<div class="lbl">${esc(title)}</div><div class="srcs">${rows}</div>`;
   }
   p_setup() {
-    const F = this.form("setup", ["power_cut", "data_source", "data_timeout_min", "controllers"]);
+    const F = this.form("setup", ["power_cut", "data_source", "data_timeout_min", "controllers", "source_kinds"]);
     if (!F.controllers.length && !this.forms.setup.ctrlInit) { F.controllers = this.controllers().map((c) => ({ ...c })); this.forms.setup.ctrlInit = true; }
+    if (!F.source_kinds) F.source_kinds = {};  // card newer than the saved config
     const chosen = new Set(F.controllers.map((c) => c.device_id));
     const cands = this.ctrlCandidates(), others = cands.filter((c) => c.kind === "other");
     const pc = F.power_cut, ds = F.data_source;
@@ -1029,7 +1067,7 @@ class SentinelControllerCard extends HTMLElement {
         ${others.length ? (this.showOtherSrc || others.some((c) => chosen.has(c.device_id))
           ? `${this.srcGroup("Other devices with switches", others, chosen, F)}${this.showOtherSrc ? this.btn("other_src", "Hide other devices", {}, "link") : ""}`
           : this.btn("other_src", `Show other devices with switches (${others.length})`, {}, "link")) : ""}
-        <p class="hint">Other devices are cars, appliances, power stations, pumps and wall light switches. They have switches but aren't outlets.</p></div>
+        <p class="hint">Other devices are things like cars, appliances, power stations, pumps and wall light switches: they have switches but aren't outlets. Device in the wrong group? ${this.btn("edit_kinds", this.editKinds ? "Done" : "Fix groups", {}, "link")}</p></div>
       ${this.sec("Data")}<div class="card pad form">
         ${this.field("Default status sensor", this.ctl("select", this.f("setup", "data_source.entity"), ds.entity, { options: ents(["sensor", "binary_sensor"]) }), "Probes without their own status sensor use this one")}
         ${this.field("OK when state is", this.ctl("text", this.f("setup", "data_source.ok_states"), ds.ok_states, { ph: "Connected" }))}
@@ -1142,7 +1180,7 @@ details .fld{border-top:1px solid var(--offb)}details .picker{margin:6px 0}
 .prow{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;flex-wrap:wrap}.prow>span{color:var(--sec);font-size:13px;font-weight:600}
 .days{display:flex;gap:6px;flex-wrap:wrap}.day{border:1px solid var(--bd);background:var(--card);border-radius:18px;padding:7px 12px;cursor:pointer;font-weight:600;color:var(--sec)}.day.on{background:var(--ac);color:#fff;border-color:var(--ac)}
 .presets{display:flex;gap:14px}.gin{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0}
-.checks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}.srcs{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}.src{display:flex;flex-direction:column;gap:6px;align-items:flex-start}.checks.sub{margin:0 0 4px 28px}.checks.sub .chk{background:var(--card);border:1px solid var(--bd);font-size:13px;padding:4px 8px}.chk{display:flex;align-items:center;gap:6px;background:var(--offb);border-radius:8px;padding:6px 10px;cursor:pointer}
+.checks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}.srcs{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}.src{display:flex;flex-direction:column;gap:6px;align-items:flex-start}.srow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.kindsel{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx)}.checks.sub{margin:0 0 4px 28px}.checks.sub .chk{background:var(--card);border:1px solid var(--bd);font-size:13px;padding:4px 8px}.chk{display:flex;align-items:center;gap:6px;background:var(--offb);border-radius:8px;padding:6px 10px;cursor:pointer}
 .pump{display:flex;gap:14px;padding:12px 14px;align-items:stretch}
 .tank{width:34px;min-height:78px;border:2px solid #c3d1dd;border-top-width:1px;border-radius:4px 4px 8px 8px;position:relative;overflow:hidden;background:#f4f7fa;flex:none}
 .tank i{position:absolute;left:0;right:0;bottom:0;transition:height .6s}

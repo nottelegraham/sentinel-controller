@@ -2,6 +2,7 @@ from datetime import timedelta
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from custom_components.sentinel_controller.const import CARD_VERSION
 
 DOMAIN = "sentinel_controller"
 
@@ -137,4 +138,39 @@ async def test_dashboard_resource_replaces_stale_copies(hass, hass_ws_client):
     await ws.send_json({"id": 9, "type": "lovelace/resources"})
     r = await ws.receive_json()
     urls = [x["url"] for x in r["result"]]
-    assert len(urls) == 1 and urls[0].startswith("/sentinel_controller_static/sentinel-controller-loader.js?v=0.2.10-"), urls
+    assert len(urls) == 1 and urls[0].startswith("/sentinel_controller_static/sentinel-controller-loader.js?v=" + CARD_VERSION + "-"), urls
+
+
+async def test_drives_apex_style_select(hass, hass_ws_client):
+    """An Apex Fusion outlet is a select (Off / Auto / On); Sentinel sets On or Off on it."""
+    hass.states.async_set("sensor.tank_temp", "76.5")
+    calls = []
+
+    async def _opt(call):
+        calls.append(call.data["option"])
+        hass.states.async_set(call.data["entity_id"], call.data["option"], {"options": ["Off", "Auto", "On"]})
+    hass.services.async_register("select", "select_option", _opt)
+    hass.states.async_set("select.apex_heater", "Auto", {"options": ["Off", "Auto", "On"]})
+
+    entry = MockConfigEntry(domain=DOMAIN, data={}, title="Sentinel Controller")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    ws = await hass_ws_client(hass)
+    probes = [{"id": "p1", "name": "Tank", "kind": "temperature", "entity": "sensor.tank_temp", "unit": "°F",
+               "nominal": 77, "hysteresis": 0.36, "alarm": {"active": False}}]
+    await ws.send_json({"id": 1, "type": "sentinel_controller/save", "section": "probes", "value": probes})
+    r = await ws.receive_json(); assert r["success"], r
+    chans = r["result"]["config"]["channels"]
+    chans[0].update({"name": "Heater", "entity": "select.apex_heater",
+                     "fn": {"type": "temperature", "param": "p1", "mode": "heater"}})
+    await ws.send_json({"id": 2, "type": "sentinel_controller/save", "section": "channels", "value": chans})
+    r = await ws.receive_json(); assert r["success"], r
+    await hass.async_block_till_done()
+    assert hass.states.get("select.apex_heater").state == "On" and calls == ["On"]
+
+    hass.states.async_set("sensor.tank_temp", "77.3")
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=20))
+    await hass.async_block_till_done()
+    assert hass.states.get("select.apex_heater").state == "Off"
+    assert await hass.config_entries.async_unload(entry.entry_id)

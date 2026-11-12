@@ -12,14 +12,15 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import RESEND_SECONDS, SIGNAL_UPDATE, STORE_CONFIG, STORE_RUNTIME, TICK_SECONDS
+from . import logic
 from .logic import Controller, Input, merge_config
 
 _LOGGER = logging.getLogger(__name__)
 
-SWITCHABLE = {"switch", "light", "fan", "input_boolean", "siren", "humidifier"}
+SWITCHABLE = {"switch", "light", "fan", "input_boolean", "siren", "humidifier", "select"}
 CONFIG_SECTIONS = {
     "probes", "level_sensors", "timers", "illumination", "light_reduction", "feed_pauses", "maintenance",
-    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min", "data_source", "controllers",
+    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min", "data_source", "controllers", "source_kinds",
 }
 
 
@@ -168,7 +169,7 @@ class Runtime:
                                "text": f"Switch channel {n} ({ch.get('name') or ent}) is unavailable"})
                 res["actual"] = None
                 continue
-            actual = st.state == "on"
+            actual = str(st.state).strip().lower() == "on"  # a select reads "On" / "Auto" / "Off"
             res["actual"] = actual
             if actual and dt > 0:
                 self._hours[str(n)] = self._hours.get(str(n), 0.0) + dt / 3600.0
@@ -179,6 +180,16 @@ class Runtime:
             key = f"{ent}:{want}"  # only throttle repeats of the same command, never a reversal
             last = self._last_cmd.get(key)
             if last and (now - last).total_seconds() < RESEND_SECONDS:
+                continue
+            if domain == "select":
+                option = logic.select_option(st.attributes.get("options"), want)
+                if option is None:
+                    alarms.append({"key": f"channel_{n}_select",
+                                   "text": f"Switch channel {n}: {ent} has no On/Off option"})
+                    continue
+                self._last_cmd[key] = now
+                self.hass.async_create_task(self.hass.services.async_call(
+                    "select", "select_option", {"entity_id": ent, "option": option}, blocking=False))
                 continue
             self._last_cmd[key] = now
             self.hass.async_create_task(

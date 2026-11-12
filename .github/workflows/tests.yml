@@ -8,3 +8,11 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.13"}
       - run: pip install pytest && pytest -q tests
+  card:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - run: npm install --no-save jsdom
+      - run: node tests_js/sources_test.js custom_components/sentinel_controller/www/sentinel-controller-card.js

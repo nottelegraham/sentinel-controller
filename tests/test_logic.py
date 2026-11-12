@@ -309,3 +309,19 @@ def test_per_probe_status_entity_overrides_global():
     s = c.tick(T0, {"sensor.temp": Input("77", T0), "sensor.ghl_conn": Input("Disconnected", T0),
                     "sensor.hydros_online": Input("Online", T0)})
     assert s["probes"]["t1"]["value"] == 77.0
+
+
+def test_select_option_apex_style():
+    opts = ["Off", "Auto", "On"]
+    assert logic.select_option(opts, True) == "On"
+    assert logic.select_option(opts, False) == "Off"
+    assert logic.select_option(["off", "on"], True) == "on"
+    assert logic.select_option(["Low", "High"], True) is None
+    assert logic.select_option(None, False) is None
+
+
+def test_source_kinds_default_and_merge():
+    assert logic.default_config()["source_kinds"] == {}
+    cfg = logic.merge_config({"source_kinds": {"dev1": "strip"}, "controllers": [{"device_id": "d", "name": "D", "outlets": ["switch.a"]}]})
+    assert cfg["source_kinds"] == {"dev1": "strip"}
+    assert cfg["controllers"][0]["outlets"] == ["switch.a"]

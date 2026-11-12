@@ -96,6 +96,12 @@ def _hm(s: str | None) -> int | None:
     return h * 60 + m
 
 
+def select_option(options, want: bool) -> str | None:
+    """Option on an outlet-style select (Apex 'Off / Auto / On') that means on or off, in its own spelling."""
+    target = "on" if want else "off"
+    return next((o for o in options or [] if str(o).strip().lower() == target), None)
+
+
 def default_config() -> dict[str, Any]:
     return {
         "version": 1,
@@ -130,7 +136,8 @@ def default_config() -> dict[str, Any]:
         "notify": {"targets": [], "on_new_alarm": True, "on_clear": False, "repeat_min": 0, "daily_at": ""},
         "data_timeout_min": 0,
         "data_source": {"entity": "", "ok_states": "Connected"},
-        "controllers": [],  # [{"device_id", "name"}]; empty = auto-detect in the card
+        "controllers": [],  # [{"device_id", "name", "outlets"?}]; empty = auto-detect in the card
+        "source_kinds": {},  # device_id -> "controller" | "strip" | "other": the user's fix to the card's guess
     }
 
 
