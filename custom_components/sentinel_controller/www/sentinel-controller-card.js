@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -175,8 +175,8 @@ class SentinelControllerCard extends HTMLElement {
   }
 
   // entity picker — search filters in place, no re-render
-  picker(path, cur, domains, emptyLabel = "Choose a device…") {
-    const list = Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0]))
+  picker(path, cur, domains, emptyLabel = "Choose a device…", numeric = false) {
+    const list = Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0]) && (!numeric || e === cur || !isNaN(parseFloat(this._hass.states[e].state))))
       .sort((a, b) => (this.edev(a) ? 0 : 1) - (this.edev(b) ? 0 : 1) || this.edev(a).localeCompare(this.edev(b)) || this.ename(a).localeCompare(this.ename(b)));
     const sub = (e) => esc([this.edev(e), e].filter(Boolean).join(" · "));
     const sel = cur ? `<div class="pk-cur">${this.icon("mdi:check-circle", "okc")}<div><b>${esc(this.ename(cur))}</b><small>${sub(cur)}</small></div><span class="st">${esc(this._hass.states[cur]?.state ?? "missing")}</span></div>` : `<div class="pk-cur none">${esc(emptyLabel)}</div>`;
@@ -501,7 +501,7 @@ class SentinelControllerCard extends HTMLElement {
     const v = d.entity ? this._hass.states[d.entity]?.state : null;
     return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Tank temperature" }))}
       ${this.field("Type", this.ctl("seg", this.d("kind"), d.kind, { options: [["temperature", "Temperature"], ["ph", "pH"], ["other", "Other"]] }))}
-      <div class="lbl">Sensor it reads</div>${this.picker("entity", d.entity, ["sensor", "input_number", "number"], "Choose a sensor from any controller…")}
+      <div class="lbl">Sensor it reads</div>${this.picker("entity", d.entity, ["sensor", "input_number", "number"], "Choose a sensor from any controller…", true)}
       ${this.field("Unit", this.ctl("text", this.d("unit"), d.unit, { ph: u || "°F" }), "Leave empty to use the sensor's unit")}
       <div class="lbl">Control</div>
       ${this.field("Setpoint", this.ctl("num", this.d("nominal"), d.nominal, { step: 0.01, u, r: 1 }), "The nominal value outlets hold")}
