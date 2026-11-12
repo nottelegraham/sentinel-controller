@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.11";
+const VERSION = "0.2.12";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -909,7 +909,7 @@ class SentinelControllerCard extends HTMLElement {
     const page = this["p_" + this.tab].call(this);
     const drawer = sr.querySelector(".drawer-wrap");
     sr.innerHTML = `${STYLE}<div class="root">
-      <div class="hdr"><div class="ttl"><b>Sentinel Controller</b><span data-live="clock"></span></div>
+      <div class="hdr"><div class="ttl"><div class="ttop"><b>Sentinel Controller</b><small class="ver" title="Sentinel Controller version">v${VERSION}</small></div><span data-live="clock"></span></div>
         <button type="button" class="bell" data-tab="alerts" aria-label="Alerts" data-live="bell"></button></div>
       <nav class="tabs" aria-label="Sections">${tabs}</nav>
       <div class="page">${page}</div></div>`;
@@ -1084,6 +1084,7 @@ const STYLE = `<style>
 .hdr{display:flex;align-items:stretch;border-radius:10px;overflow:hidden;box-shadow:var(--sh)}
 .ttl{flex:1;background:linear-gradient(90deg,#0058a0 0%,#0069b4 60%,#1b86cf 100%);color:#fff;padding:12px 18px;display:flex;flex-direction:column}
 .ttl b{font-size:20px;font-weight:700}.ttl span{font-size:14px;opacity:.85;min-height:18px}
+.ttop{display:flex;align-items:baseline;justify-content:space-between;gap:10px}.ttl .ver{font-size:12px;opacity:.75;font-variant-numeric:tabular-nums;white-space:nowrap}
 .bell{width:68px;border:none;background:#0069b4;color:#fff;cursor:pointer;position:relative;border-left:2px solid rgba(255,255,255,.35)}
 .bell ha-icon{--mdc-icon-size:28px}.bell b{position:absolute;top:10px;right:10px;background:var(--bad);color:#fff;border-radius:9px;font-size:11px;min-width:18px;height:18px;line-height:18px;padding:0 4px}
 .tabs{display:flex;gap:4px;overflow-x:auto;margin:12px 0 4px;padding:4px;background:var(--card);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--sh);scrollbar-width:none}
