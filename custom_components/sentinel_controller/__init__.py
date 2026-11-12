@@ -19,6 +19,7 @@ from homeassistant.helpers import config_validation as cv
 
 from . import websocket as sc_ws
 from .const import CARD_VERSION, DOMAIN, STATIC_URL
+from .lovelace_resource import async_register_resource
 from .runtime import Runtime
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
@@ -53,6 +54,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     # older iPhones/iPads get the legacy frontend, which only loads es5 scripts.
     add_extra_js_url(hass, loader)
     add_extra_js_url(hass, loader, es5=True)
+    # Phone apps cache the start page; dashboard resources are always fetched fresh.
+    async_register_resource(hass, f"{STATIC_URL}/sentinel-controller-loader.js", loader)
     sc_ws.async_register(hass)
 
     async def handle(call: ServiceCall) -> None:

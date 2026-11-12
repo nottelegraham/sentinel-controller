@@ -107,3 +107,17 @@ async def test_card_version_endpoint(hass, hass_client):
     r = await client.get("/sentinel_controller_static/sentinel-controller-loader.js")
     assert r.status == 200 and "card_version" in await r.text()
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_dashboard_resource(hass, hass_ws_client):
+    assert await async_setup_component(hass, "lovelace", {})
+    entry = MockConfigEntry(domain=DOMAIN, data={}, title="Sentinel Controller")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_start()
+    await hass.async_block_till_done()
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "lovelace/resources"})
+    r = await ws.receive_json()
+    urls = [x["url"] for x in r["result"] if "sentinel-controller-loader.js" in x["url"]]
+    assert len(urls) == 1 and "?v=0." in urls[0], r
