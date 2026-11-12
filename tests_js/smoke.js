@@ -74,6 +74,11 @@ const sleep = (t = 10) => new Promise((r) => setTimeout(r, t));
   const cb = q('input[data-notify="notify.pushover"]'); cb.checked = !cb.checked; cb.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep();
   q('[data-act="form_save"]').click(); await sleep(30);
   if (!calls.some((c) => c.section === "notify")) errs.push("notify save missing");
+  // shortcut buttons ("Add a probe", "Open probe"…) switch tab AND open the editor
+  q('[data-tab="overview"]').click(); await sleep();
+  const go = q('[data-act="goto"][data-kind]');
+  if (!go) errs.push("no goto-with-editor button on overview"); else { go.click(); await sleep(30); if (!q(".drawer")) errs.push("goto did not open the editor"); el.drawer.dirty = false; await el._closeDrawer(); }
+  if (sr.querySelector('[data-act="goto"][data-tab]')) errs.push("goto button carries data-tab");
   // live updates don't throw
   el._onStatus(fx.status); await sleep();
   console.log(errs.length ? "ERRORS:\n" + errs.join("\n") : "SMOKE OK", "| toasts:", toasts.join(" / "));

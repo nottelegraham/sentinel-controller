@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -176,15 +176,14 @@ class SentinelControllerCard extends HTMLElement {
 
   // entity picker — search filters in place, no re-render
   picker(path, cur, domains, emptyLabel = "Choose a device…") {
-    const list = Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0]));
-    const groups = {};
-    list.forEach((e) => { const g = this.edev(e) || "Other"; (groups[g] = groups[g] || []).push(e); });
-    const gk = Object.keys(groups).sort((a, b) => (a === "Other") - (b === "Other") || a.localeCompare(b));
-    const sel = cur ? `<div class="pk-cur">${this.icon("mdi:check-circle", "okc")}<div><b>${esc(this.ename(cur))}</b><small>${esc([this.edev(cur), cur].filter(Boolean).join(" · "))}</small></div><span class="st">${esc(this._hass.states[cur]?.state ?? "missing")}</span></div>` : `<div class="pk-cur none">${esc(emptyLabel)}</div>`;
+    const list = Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0]))
+      .sort((a, b) => (this.edev(a) ? 0 : 1) - (this.edev(b) ? 0 : 1) || this.edev(a).localeCompare(this.edev(b)) || this.ename(a).localeCompare(this.ename(b)));
+    const sub = (e) => esc([this.edev(e), e].filter(Boolean).join(" · "));
+    const sel = cur ? `<div class="pk-cur">${this.icon("mdi:check-circle", "okc")}<div><b>${esc(this.ename(cur))}</b><small>${sub(cur)}</small></div><span class="st">${esc(this._hass.states[cur]?.state ?? "missing")}</span></div>` : `<div class="pk-cur none">${esc(emptyLabel)}</div>`;
     return `<div class="picker">${sel}
       <input class="pk-q" placeholder="Search ${list.length} by name, device or id" data-pkq="1" aria-label="Search">
       <div class="pk-list">${cur ? `<div class="pk-i clear" data-act="pick" data-path="${path}" data-v="">${this.icon("mdi:close")}<span>Clear</span></div>` : ""}
-      ${gk.map((g) => `<div class="pk-g">${esc(g)}</div>${groups[g].sort((a, b) => this.ename(a).localeCompare(this.ename(b))).map((e) => `<div class="pk-i ${e === cur ? "sel" : ""}" data-act="pick" data-path="${path}" data-v="${esc(e)}" data-s="${esc((this.ename(e) + " " + e + " " + g).toLowerCase())}"><span class="nm">${esc(this.ename(e))}<small>${esc(e)}</small></span><span class="st">${esc(this._hass.states[e]?.state ?? "")}</span></div>`).join("")}`).join("")}</div></div>`;
+      ${list.map((e) => `<div class="pk-i ${e === cur ? "sel" : ""}" data-act="pick" data-path="${path}" data-v="${esc(e)}" data-s="${esc((this.ename(e) + " " + e + " " + this.edev(e)).toLowerCase())}"><span class="nm">${esc(this.ename(e))}<small>${sub(e)}</small></span><span class="st">${esc(this._hass.states[e]?.state ?? "")}</span></div>`).join("")}</div></div>`;
   }
 
   // controls bound to the drawer draft (data-d) or a page form (data-f="form|path")
@@ -210,7 +209,6 @@ class SentinelControllerCard extends HTMLElement {
     if (el.dataset?.pkq !== undefined) {
       const q = el.value.trim().toLowerCase(); const box = el.closest(".picker");
       box.querySelectorAll(".pk-i[data-s]").forEach((i) => (i.style.display = !q || i.dataset.s.includes(q) ? "" : "none"));
-      box.querySelectorAll(".pk-g").forEach((g) => { let n = g.nextElementSibling, any = false; while (n && n.classList.contains("pk-i")) { if (n.style.display !== "none") any = true; n = n.nextElementSibling; } g.style.display = any ? "" : "none"; });
       return;
     }
     if (el.dataset?.notify !== undefined) {
@@ -281,7 +279,7 @@ class SentinelControllerCard extends HTMLElement {
       case "manual": return run("channel_manual", ds.n, ds.v === "on");
       case "goto": {
         if (this.drawer && !(await this._closeDrawer())) return;
-        this.tab = ds.tab; this._render(); if (ds.kind && ds.n) this._openDrawer(ds.kind, ds.n); return;
+        this.tab = ds.to; this._render(); if (ds.kind && ds.n) this._openDrawer(ds.kind, ds.n); return;
       }
     }
   }
@@ -459,24 +457,24 @@ class SentinelControllerCard extends HTMLElement {
     const opts = (list, empty) => (list.length ? list : [["", empty]]);
     if (t === "temperature" || t === "ph") {
       const ps = this.cfg.probes.filter((p) => p.kind === (t === "ph" ? "ph" : "temperature"));
-      if (!ps.length) return `<div class="note warn">${this.icon("mdi:information-outline")}<span>No ${t === "ph" ? "pH" : "temperature"} probe yet.</span>${this.btn("goto", "Add one", { tab: "probes", kind: "probe", n: "new" }, "link")}</div>`;
+      if (!ps.length) return `<div class="note warn">${this.icon("mdi:information-outline")}<span>No ${t === "ph" ? "pH" : "temperature"} probe yet.</span>${this.btn("goto", "Add one", { to: "probes", kind: "probe", n: "new" }, "link")}</div>`;
       const p = this.probe(fn.param) || ps[0]; const [lo, hi] = this.points(p), u = this.unit(p), v = this.st(["probes", p.id, "value"]);
       const lowOn = (t === "temperature" && fn.mode !== "cooler") || (t === "ph" && fn.mode !== "down");
       return `${this.field("Probe", this.ctl("select", this.d(P("param")), p.id, { r: 1, options: ps.map((x) => [x.id, `${x.name || x.id}${this.edev(x.entity) ? " · " + this.edev(x.entity) : ""}`]) }))}
         <p class="sentence">Turns <b>ON</b> at or ${lowOn ? "below" : "above"} <b>${fmt(lowOn ? lo : hi)}${esc(u)}</b> and <b>OFF</b> at or ${lowOn ? "above" : "below"} <b>${fmt(lowOn ? hi : lo)}${esc(u)}</b>. Now <b>${fmt(v)}${esc(u)}</b>.</p>
-        <p class="hint">Setpoint ${fmt(p.nominal)}${esc(u)}, hysteresis ${fmt(p.hysteresis)}${esc(u)} — set on the probe. ${this.btn("goto", "Change", { tab: "probes", kind: "probe", n: p.id }, "link")}${p.alarm?.deactivate_control ? " Turns off while the probe is in alarm." : ""}</p>`;
+        <p class="hint">Setpoint ${fmt(p.nominal)}${esc(u)}, hysteresis ${fmt(p.hysteresis)}${esc(u)} — set on the probe. ${this.btn("goto", "Change", { to: "probes", kind: "probe", n: p.id }, "link")}${p.alarm?.deactivate_control ? " Turns off while the probe is in alarm." : ""}</p>`;
     }
     if (t === "timer") {
       const ts = this.cfg.timers.filter((x) => x.mode === "normal" && this.timerUsed(x)); const x = this.item("timers", fn.param);
       const nf = this.nextFree("timers", (y) => this.timerUsed(y));
       return `${this.field("Timer", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, r: 1, options: opts(ts.map((y) => [y.n, `${y.name || "Timer " + y.n} · ${this.periodsText(y.entries)}`]), "No timers yet") }))}
-        ${x && this.timerUsed(x) && x.mode === "normal" ? this.timeline(x.entries) : ""}<p class="hint">${ts.length ? this.btn("goto", "Edit this schedule", { tab: "schedules", kind: "timer", n: x?.n || ts[0].n }, "link") : nf ? this.btn("goto", "Create a schedule", { tab: "schedules", kind: "timer", n: nf }, "link") : ""}</p>`;
+        ${x && this.timerUsed(x) && x.mode === "normal" ? this.timeline(x.entries) : ""}<p class="hint">${ts.length ? this.btn("goto", "Edit this schedule", { to: "schedules", kind: "timer", n: x?.n || ts[0].n }, "link") : nf ? this.btn("goto", "Create a schedule", { to: "schedules", kind: "timer", n: nf }, "link") : ""}</p>`;
     }
     if (t === "illumination") {
       const ls = this.cfg.illumination.filter((y) => this.timerUsed(y)); const x = this.item("illumination", fn.param);
       const nf = this.nextFree("illumination", (y) => this.timerUsed(y));
       return `${this.field("Light schedule", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, r: 1, options: opts(ls.map((y) => [y.n, `${y.name || "Light " + y.n} · ${this.periodsText(y.entries)}`]), "No light schedules yet") }))}
-        ${x && this.timerUsed(x) ? this.timeline(x.entries, "normal", x.color) : ""}<p class="hint">${ls.length ? this.btn("goto", "Edit this light schedule", { tab: "schedules", kind: "light", n: x?.n || ls[0].n }, "link") : nf ? this.btn("goto", "Create a light schedule", { tab: "schedules", kind: "light", n: nf }, "link") : ""}</p>`;
+        ${x && this.timerUsed(x) ? this.timeline(x.entries, "normal", x.color) : ""}<p class="hint">${ls.length ? this.btn("goto", "Edit this light schedule", { to: "schedules", kind: "light", n: x?.n || ls[0].n }, "link") : nf ? this.btn("goto", "Create a light schedule", { to: "schedules", kind: "light", n: nf }, "link") : ""}</p>`;
     }
     if (t === "filter" || t === "maintenance") {
       const sec = t === "filter" ? "feed_pauses" : "maintenance";
@@ -487,12 +485,12 @@ class SentinelControllerCard extends HTMLElement {
       const want = { fill_water: null, fill_ato: ["ato", "minmax", "ato2", "ato_wc"], fill_awc: ["wc", "ato_wc"], drain_water: ["wc", "ato_wc"] }[t];
       const cs = this.cfg.level_circuits.filter((c) => c.mode !== "off" && (!want || want.includes(c.mode)));
       return `${this.field("Level circuit", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, options: opts(cs.map((c) => [c.n, `${c.name || LEVEL[c.mode].label} · ${LEVEL[c.mode].label}`]), "No matching circuit yet") }))}
-        <p class="hint">${{ fill_water: "Stays ON; turns OFF while the circuit reports a leak or level alarm.", fill_ato: "Runs the top-off pump for that circuit.", fill_awc: "Runs during the fill phase of a water change.", drain_water: "Runs during the drain phase of a water change." }[t]} ${this.btn("goto", cs.length ? "Open Water" : "Set one up in Water", { tab: "water" }, "link")}</p>`;
+        <p class="hint">${{ fill_water: "Stays ON; turns OFF while the circuit reports a leak or level alarm.", fill_ato: "Runs the top-off pump for that circuit.", fill_awc: "Runs during the fill phase of a water change.", drain_water: "Runs during the drain phase of a water change." }[t]} ${this.btn("goto", cs.length ? "Open Water" : "Set one up in Water", { to: "water" }, "link")}</p>`;
     }
     if (t === "logic") {
       const gs = this.cfg.logic.filter((g) => this.gateUsed(g));
       return `${this.field("Logic gate", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, options: opts(gs.map((g) => [g.n, `${g.name || "Gate " + g.n} · ${this.gateText(g)}`]), "No gates yet") }))}
-        <p class="hint">${this.btn("goto", gs.length ? "Open Logic" : "Create a gate in Logic", { tab: "logic" }, "link")}</p>`;
+        <p class="hint">${this.btn("goto", gs.length ? "Open Logic" : "Create a gate in Logic", { to: "logic" }, "link")}</p>`;
     }
     return "";
   }
@@ -570,7 +568,7 @@ class SentinelControllerCard extends HTMLElement {
     const two = ["minmax", "ato2", "wc", "ato_wc"].includes(d.mode), ato = ["ato", "minmax", "ato2", "ato_wc"].includes(d.mode), wc = ["wc", "ato_wc"].includes(d.mode);
     const nT = this.cfg.timers.filter((t) => t.mode === "normal" && this.timerUsed(t)), eT = this.cfg.timers.filter((t) => t.mode === "event" && this.timerUsed(t));
     const tiles = Object.entries(LEVEL).filter(([k]) => k !== "off").map(([k, m]) => `<button type="button" class="ftile ${d.mode === k ? "on" : ""}" aria-pressed="${d.mode === k}" data-act="lvlmode" data-mode="${k}">${this.icon(m.icon)}<b>${esc(m.label)}</b><small>${esc(m.desc)}</small></button>`).join("");
-    if (sOpts.length === 1) return `<div class="note warn">${this.icon("mdi:information-outline")}<span>Add a level sensor first — a float, optical or leak sensor from any controller.</span>${this.btn("goto", "Add sensor", { tab: "water", kind: "lsensor", n: this.nextFree("level_sensors", (s) => s.entity) || 1 }, "link")}</div>`;
+    if (sOpts.length === 1) return `<div class="note warn">${this.icon("mdi:information-outline")}<span>Add a level sensor first — a float, optical or leak sensor from any controller.</span>${this.btn("goto", "Add sensor", { to: "water", kind: "lsensor", n: this.nextFree("level_sensors", (s) => s.entity) || 1 }, "link")}</div>`;
     return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: d.mode === "leak" ? "e.g. Sump leak" : "e.g. ATO" }))}
       <div class="lbl">Mode</div><div class="ftiles">${tiles}</div>
       <div class="detail">
@@ -685,7 +683,7 @@ class SentinelControllerCard extends HTMLElement {
   }
   _probeLive(p) {
     const v = this.st(["probes", p.id, "value"]), u = this.unit(p);
-    return `<div class="pv"><span class="big">${v == null ? "—" : fmt(v, p.kind === "ph" ? 2 : 1)}</span><span class="u">${esc(u)}</span>${this.stateChip(p)}</div>${this.bandBar(p)}`;
+    return `<div class="pv"><span class="big">${v == null ? "—" : Number(v).toFixed(p.kind === "ph" ? 2 : 1)}</span><span class="u">${esc(u)}</span>${this.stateChip(p)}</div>${this.bandBar(p)}`;
   }
   _fpLive(f) {
     if (!f) return "";
@@ -721,8 +719,8 @@ class SentinelControllerCard extends HTMLElement {
       let act = "";
       if (a.reminder) act = this.btn("ack", "Done", { n: a.reminder }, "ghost sm");
       else if (/^level_\d+$/.test(a.key)) act = this.btn("reset", "Reset", { n: a.key.split("_")[1] }, "ghost sm");
-      else if (/^probe_/.test(a.key)) act = this.btn("goto", "Open probe", { tab: "probes", kind: "probe", n: a.key.replace(/^probe_/, "").replace(/_fault$/, "") }, "link");
-      else if (/^channel_\d+/.test(a.key)) act = this.btn("goto", "Open outlet", { tab: "outlets", kind: "channel", n: a.key.split("_")[1] }, "link");
+      else if (/^probe_/.test(a.key)) act = this.btn("goto", "Open probe", { to: "probes", kind: "probe", n: a.key.replace(/^probe_/, "").replace(/_fault$/, "") }, "link");
+      else if (/^channel_\d+/.test(a.key)) act = this.btn("goto", "Open outlet", { to: "outlets", kind: "channel", n: a.key.split("_")[1] }, "link");
       return `<div class="al">${this.icon(a.reminder ? "mdi:calendar-alert" : "mdi:alert")}<span>${esc(a.text)}</span>${act}</div>`;
     }).join("")}</div>`;
   }
@@ -759,13 +757,13 @@ class SentinelControllerCard extends HTMLElement {
     const water = this.cfg.level_circuits.filter((c) => c.mode !== "off").map((c) => `<div class="card lvl"><button type="button" class="lh" data-act="open" data-kind="circuit" data-n="${c.n}">${this.icon(LEVEL[c.mode].icon, "ic")}<div><b>${esc(c.name || LEVEL[c.mode].label)}</b><small>${esc(LEVEL[c.mode].label)}</small></div></button><div data-live="lvl:${c.n}"></div></div>`).join("");
     const nextCh = this.nextFree("channels", (c) => c.entity || c.name);
     return `<div data-live="power"></div><div data-live="override"></div><div data-live="alarms"></div>
-      ${this.sec("Probes", this.btn("goto", "Manage", { tab: "probes" }, "link"))}
-      <div class="grid g4">${probes || this.empty("mdi:thermometer-plus", "No probes yet", "Add temperature and pH from any controller — GHL, HYDROS, Apex.", this.btn("goto", "Add a probe", { tab: "probes", kind: "probe", n: "new" }, "primary"))}</div>
-      ${this.sec("Feed & maintenance", this.btn("goto", "Manage", { tab: "modes" }, "link"))}
+      ${this.sec("Probes", this.btn("goto", "Manage", { to: "probes" }, "link"))}
+      <div class="grid g4">${probes || this.empty("mdi:thermometer-plus", "No probes yet", "Add temperature and pH from any controller — GHL, HYDROS, Apex.", this.btn("goto", "Add a probe", { to: "probes", kind: "probe", n: "new" }, "primary"))}</div>
+      ${this.sec("Feed & maintenance", this.btn("goto", "Manage", { to: "modes" }, "link"))}
       <div class="grid g4">${modes}</div>
-      ${this.sec("Outlets", this.btn("goto", "Manage", { tab: "outlets" }, "link"))}
-      <div class="grid g3">${outs.map((c) => this._outletCard(c)).join("") || this.empty("mdi:power-socket-us", "No outlets yet", "Pick any switch or smart plug and choose what it does.", nextCh ? this.btn("goto", "Add an outlet", { tab: "outlets", kind: "channel", n: nextCh }, "primary") : "")}</div>
-      ${water ? `${this.sec("Water", this.btn("goto", "Manage", { tab: "water" }, "link"))}<div class="grid g3">${water}</div>` : ""}`;
+      ${this.sec("Outlets", this.btn("goto", "Manage", { to: "outlets" }, "link"))}
+      <div class="grid g3">${outs.map((c) => this._outletCard(c)).join("") || this.empty("mdi:power-socket-us", "No outlets yet", "Pick any switch or smart plug and choose what it does.", nextCh ? this.btn("goto", "Add an outlet", { to: "outlets", kind: "channel", n: nextCh }, "primary") : "")}</div>
+      ${water ? `${this.sec("Water", this.btn("goto", "Manage", { to: "water" }, "link"))}<div class="grid g3">${water}</div>` : ""}`;
   }
   _outletCard(c) {
     const f = funcOf(c.fn);
