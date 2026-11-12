@@ -1,610 +1,984 @@
-/* Sentinel Controller card — ProfiLux-4-style control scheme for Home Assistant.
- * Menu and settings follow the GHL "ProfiLux 4 / 4e Resource Guide (GHL Connect edition)". */
+/* Sentinel Controller card.
+ * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.1.4";
+const VERSION = "0.2.0";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const hm = (s) => { const m = /^(\d{1,2}):(\d{2})/.exec(s || ""); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+const fmt = (v, d = 2) => (v == null || isNaN(v) ? "—" : String(Number(Number(v).toFixed(d))));
+const setp = (o, path, v) => { const ks = path.split("."); let x = o; ks.slice(0, -1).forEach((k) => { const kk = /^\d+$/.test(k) ? Number(k) : k; if (x[kk] == null) x[kk] = {}; x = x[kk]; }); const l = ks[ks.length - 1]; x[/^\d+$/.test(l) ? Number(l) : l] = v; };
 
-const MENU = [
-  ["dashboard", "Dashboard", "mdi:view-dashboard"],
-  ["sensors", "Sensors", "mdi:thermometer"],
-  ["channels", "Switch channels", "mdi:power-socket-us"],
-  ["timers", "Processes (timers)", "mdi:timer-outline"],
-  ["illumination", "Illumination", "mdi:lightbulb-outline"],
-  ["feed", "Feed pause", "mdi:fish"],
-  ["maintenance", "Maintenance / Power cut", "mdi:wrench"],
-  ["level", "Level control", "mdi:waves-arrow-up"],
-  ["logic", "Programmable logic", "mdi:gate-and"],
-  ["reminders", "Reminders", "mdi:calendar-alert"],
-  ["notify", "Notifications", "mdi:bell-ring-outline"],
-  ["system", "System", "mdi:cog-outline"],
+const TABS = [
+  ["overview", "Overview", "mdi:view-dashboard-outline"],
+  ["outlets", "Outlets", "mdi:power-socket-us"],
+  ["probes", "Probes", "mdi:thermometer"],
+  ["schedules", "Schedules", "mdi:calendar-clock"],
+  ["modes", "Feed & Maintenance", "mdi:fish"],
+  ["water", "Water", "mdi:waves-arrow-up"],
+  ["logic", "Logic", "mdi:gate-and"],
+  ["alerts", "Alerts", "mdi:bell-outline"],
+  ["setup", "Setup", "mdi:cog-outline"],
 ];
 
-const FN_LABEL = {
-  always_off: "Always off", always_on: "Always on", temperature: "Temperature", ph: "pH value",
-  timer: "Timer", illumination: "Illumination", filter: "Filter (feed pause)", maintenance: "Maintenance",
-  fill_water: "Fill water (leakage / level)", fill_ato: "Fill water ATO only", fill_awc: "Fill water AWC only",
-  drain_water: "Drain water", logic: "Programmable logic",
+const FUNCS = [
+  { key: "always_on", type: "always_on", icon: "mdi:power", label: "Always on", desc: "Return pump, powerheads" },
+  { key: "heater", type: "temperature", mode: "heater", icon: "mdi:radiator", label: "Heater", desc: "On below the temperature setpoint" },
+  { key: "cooler", type: "temperature", mode: "cooler", icon: "mdi:fan", label: "Cooler / fan", desc: "On above the temperature setpoint" },
+  { key: "ph_up", type: "ph", mode: "up", icon: "mdi:arrow-up-bold-circle-outline", label: "pH up", desc: "On below the pH setpoint (control upwards)" },
+  { key: "ph_down", type: "ph", mode: "down", icon: "mdi:arrow-down-bold-circle-outline", label: "pH down", desc: "On above the pH setpoint (CO2 for a calcium reactor)" },
+  { key: "timer", type: "timer", icon: "mdi:timer-outline", label: "Schedule", desc: "On during a timer's periods" },
+  { key: "illumination", type: "illumination", icon: "mdi:lightbulb-on-outline", label: "Light", desc: "Non-dimmable light schedule" },
+  { key: "filter", type: "filter", icon: "mdi:fish-off", label: "Feed pause", desc: "Off while a feed pause runs" },
+  { key: "fill_water", type: "fill_water", icon: "mdi:water-alert-outline", label: "Leak / level shutoff", desc: "Off while a leak or level circuit alarms" },
+  { key: "fill_ato", type: "fill_ato", icon: "mdi:water-plus-outline", label: "ATO pump", desc: "Top-off pump for a level circuit" },
+  { key: "fill_awc", type: "fill_awc", icon: "mdi:water-sync", label: "AWC fill pump", desc: "Refills during a water change" },
+  { key: "drain_water", type: "drain_water", icon: "mdi:water-minus-outline", label: "AWC drain pump", desc: "Drains during a water change" },
+  { key: "maintenance", type: "maintenance", icon: "mdi:wrench-outline", label: "Maintenance", desc: "On while a maintenance mode runs" },
+  { key: "logic", type: "logic", icon: "mdi:gate-and", label: "Logic gate", desc: "Combine functions (AND, OR, delays)" },
+  { key: "always_off", type: "always_off", icon: "mdi:power-off", label: "Always off", desc: "Keep this outlet off" },
+];
+const funcOf = (fn) => {
+  const t = fn?.type || "always_off";
+  const m = fn?.mode || (t === "temperature" ? "heater" : t === "ph" ? "up" : "");
+  return FUNCS.find((f) => f.type === t && (!f.mode || f.mode === m)) || FUNCS[FUNCS.length - 1];
 };
-const LEVEL_LABEL = {
-  off: "Not used", ato: "Auto top off (1 sensor)", minmax: "Min/Max control (2 sensors)",
-  ato2: "ATO with 2 sensors", wc: "Water change", ato_wc: "ATO & water change", leak: "Leakage detection",
+
+const LEVEL = {
+  off: { icon: "mdi:minus-circle-outline", label: "Not used", desc: "" },
+  ato: { icon: "mdi:water-plus-outline", label: "Auto top off", desc: "One sensor. Pump runs while the sensor is dry." },
+  minmax: { icon: "mdi:arrow-expand-vertical", label: "Min / Max", desc: "Two sensors. Starts when the lower sensor goes dry, stops when the upper sensor sees water." },
+  ato2: { icon: "mdi:water-check-outline", label: "ATO, 2 sensors", desc: "Two sensors side by side. Runs only when both are dry." },
+  wc: { icon: "mdi:water-sync", label: "Water change", desc: "Drains until the lower sensor is dry, then fills until the upper sensor sees water." },
+  ato_wc: { icon: "mdi:water-sync", label: "ATO + water change", desc: "Water change, and the upper sensor also runs the ATO." },
+  leak: { icon: "mdi:water-alert-outline", label: "Leak detection", desc: "Alarm and outlets off while the sensor sees water." },
 };
-const OP_LABEL = { and: "AND", or: "OR", delayed_on: "Delayed ON", delayed_off: "Delayed OFF" };
-const PAGE_SECTIONS = {
-  sensors: ["probes", "light_reduction"], channels: ["channels"], timers: ["timers"],
-  illumination: ["illumination", "light_reduction"], feed: ["feed_pauses"], maintenance: ["maintenance"],
-  level: ["level_sensors", "level_circuits"], logic: ["logic"], reminders: ["reminders"], notify: ["notify"],
-  system: ["power_cut", "data_timeout_min", "data_source"],
+const OPS = {
+  and: { label: "AND", desc: "On only when both inputs are on." },
+  or: { label: "OR", desc: "On when either input is on." },
+  delayed_on: { label: "Delayed ON", desc: "Turns on only after the input has been on for the duration; turns off at once." },
+  delayed_off: { label: "Delayed OFF", desc: "Turns on at once; stays on for the duration after the input goes off." },
 };
+const LEVEL_TYPES = ["fill_water", "fill_ato", "fill_awc", "drain_water"];
 
 class SentinelControllerCard extends HTMLElement {
-  setConfig(config) { this._config = config || {}; }
-  getCardSize() { return 12; }
-
-  set hass(h) {
-    const first = !this._hass;
-    this._hass = h;
-    if (first) this._init();
-  }
+  setConfig(c) { this._config = c || {}; }
+  getCardSize() { return 14; }
+  set hass(h) { const first = !this._hass; this._hass = h; if (first) this._init(); }
 
   async _init() {
     this.attachShadow({ mode: "open" });
-    this.page = this._config?.page || "dashboard";
-    this.sel = null;
-    this.tab = 1;
-    this.dirty = new Set();
-    this.msg = "";
-    this.shadowRoot.addEventListener("click", (e) => this._click(e));
-    this.shadowRoot.addEventListener("change", (e) => this._change(e));
+    this.tab = this._config?.tab || "overview";
+    this.drawer = null;
+    this.forms = {};
+    const sr = this.shadowRoot;
+    sr.addEventListener("click", (e) => this._click(e));
+    sr.addEventListener("change", (e) => this._input(e, true));
+    sr.addEventListener("input", (e) => this._input(e, false));
+    sr.addEventListener("keydown", (e) => { if (e.key === "Escape" && this.drawer) this._closeDrawer(); });
     try {
       const r = await this._hass.callWS({ type: "sentinel_controller/get" });
-      this.cfg = r.config; this.saved = clone(r.config); this.status = r.status; this.limits = r.limits;
-      this._unsub = await this._hass.connection.subscribeMessage((m) => this._onStatus(m.status),
-        { type: "sentinel_controller/subscribe" });
-    } catch (err) {
-      this.err = err.message || String(err);
-    }
+      this.cfg = r.config; this.status = r.status; this.L = r.limits;
+      try {
+        const [ents, devs] = await Promise.all([this._hass.callWS({ type: "config/entity_registry/list" }), this._hass.callWS({ type: "config/device_registry/list" })]);
+        const dn = {}; devs.forEach((d) => (dn[d.id] = d.name_by_user || d.name));
+        this.reg = {}; ents.forEach((e) => (this.reg[e.entity_id] = { device: dn[e.device_id] || "", platform: e.platform }));
+      } catch (e) { this.reg = {}; }
+      this._unsub = await this._hass.connection.subscribeMessage((m) => this._onStatus(m.status), { type: "sentinel_controller/subscribe" });
+    } catch (err) { this.err = err.message || String(err); }
     this._render();
+    this._clock = setInterval(() => this._live(), 1000);
   }
+  disconnectedCallback() { this._unsub && this._unsub(); this._unsub = null; clearInterval(this._clock); }
+  _onStatus(st) { this.status = st; this._live(); }
 
-  disconnectedCallback() { if (this._unsub) { this._unsub(); this._unsub = null; } }
+  // ------------------------------------------------------------------ data helpers
+  st(path, d) { let v = this.status; for (const k of path) { if (v == null) return d; v = v[String(k)]; } return v ?? d; }
+  item(sec, n) { return this.cfg[sec].find((x) => x.n === Number(n)); }
+  probe(id) { return this.cfg.probes.find((p) => p.id === id); }
+  ename(e) { const s = this._hass.states[e]; return s?.attributes?.friendly_name || e || ""; }
+  edev(e) { return this.reg?.[e]?.device || ""; }
+  usedChannels() { return this.cfg.channels.filter((c) => c.entity || c.name || (c.fn?.type && c.fn.type !== "always_off")); }
+  timerUsed(t) { return !!(t.name || (t.entries || []).length); }
+  gateUsed(g) { return !!(g.name || g.in1?.type !== "always_off" || g.in2?.type !== "always_off"); }
+  nextFree(sec, used) { const f = this.cfg[sec].find((x) => !used(x)); return f ? f.n : null; }
+  usersOf(type, n) { return this.cfg.channels.filter((c) => c.fn?.type === type && Number(c.fn?.param) === Number(n)); }
+  remaining(iso) { if (!iso) return 0; return Math.max(0, (new Date(iso) - Date.now()) / 1000); }
+  mmss(s) { s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+  unit(p) { return p?.unit || (p?.kind === "ph" ? "" : this._hass.states[p?.entity]?.attributes?.unit_of_measurement || ""); }
+  points(p) { const n = Number(p?.nominal || 0), h = Number(p?.hysteresis || 0) / 2; return [n - h, n + h]; }
+  chName(c) { return `Outlet ${c.n}${c.name ? " · " + c.name : ""}`; }
 
-  _onStatus(st) {
-    this.status = st;
-    const editing = this.shadowRoot.activeElement && /INPUT|SELECT|TEXTAREA/.test(this.shadowRoot.activeElement.tagName);
-    if (editing || this.dirty.size) this._renderLive(); else this._render();
-  }
-
-  // ------------------------------------------------------------ helpers
-  st(path, dflt) {
-    let v = this.status;
-    for (const k of path) { if (v == null) return dflt; v = v[String(k)]; }
-    return v ?? dflt;
-  }
-  item(sec, n) { return this.cfg[sec].find((x) => x.n === n); }
-  ents(domains) {
-    return Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0])).sort();
-  }
-  fname(e) { const s = this._hass.states[e]; return s?.attributes?.friendly_name ? `${s.attributes.friendly_name} (${e})` : e; }
-  opt(value, label, cur) { return `<option value="${esc(value)}" ${String(value) === String(cur) ? "selected" : ""}>${esc(label)}</option>`; }
-  sel_(bind, options, cur, extra = "") {
-    return `<select data-bind="${bind}" ${extra}>${options.map(([v, l]) => this.opt(v, l, cur)).join("")}</select>`;
-  }
-  entSel(bind, domains, cur) {
-    const list = this.ents(domains);
-    if (cur && !list.includes(cur)) list.unshift(cur);
-    return `<select data-bind="${bind}"><option value="">— none —</option>${list.map((e) => this.opt(e, this.fname(e), cur)).join("")}</select>`;
-  }
-  num(bind, v, step = "any", min = "", max = "") {
-    return `<input type="number" data-bind="${bind}" data-kind="num" value="${esc(v)}" step="${step}" ${min !== "" ? `min="${min}"` : ""} ${max !== "" ? `max="${max}"` : ""}>`;
-  }
-  txt(bind, v, ph = "", type = "text") { return `<input type="${type}" data-bind="${bind}" value="${esc(v)}" placeholder="${esc(ph)}">`; }
-  chk(bind, v) { return `<label class="sw"><input type="checkbox" data-bind="${bind}" data-kind="bool" ${v ? "checked" : ""}><span></span></label>`; }
-  row(label, ctl, hint = "") { return `<div class="row"><div class="lab">${esc(label)}${hint ? `<small>${hint}</small>` : ""}</div><div class="ctl">${ctl}</div></div>`; }
-  pill(on, txtOn = "ON", txtOff = "OFF") {
-    if (on == null) return `<span class="pill na">—</span>`;
-    return `<span class="pill ${on ? "on" : "off"}">${on ? txtOn : txtOff}</span>`;
-  }
-  btn(action, label, n = "", cls = "", value = "") {
-    return `<button class="btn ${cls}" data-act="${action}" data-n="${n}" data-value="${esc(value)}">${esc(label)}</button>`;
-  }
-  getPath(path) { return path.split(".").reduce((o, k) => (o == null ? o : o[/^\d+$/.test(k) ? Number(k) : k]), this.cfg); }
-  setPath(path, val) {
-    const keys = path.split(".");
-    let o = this.cfg;
-    for (let i = 0; i < keys.length - 1; i++) { const k = /^\d+$/.test(keys[i]) ? Number(keys[i]) : keys[i]; o = o[k]; }
-    const last = keys[keys.length - 1];
-    o[/^\d+$/.test(last) ? Number(last) : last] = val;
-    this.dirty.add(keys[0]);
-  }
-  idx(sec, n) { return this.cfg[sec].findIndex((x) => x.n === n); }
-  fmtTime(iso) { if (!iso) return ""; const d = new Date(iso); return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
-  remaining(iso) { if (!iso) return ""; const s = Math.max(0, (new Date(iso) - Date.now()) / 1000); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; }
-
-  fnSummary(fn) {
-    if (!fn) return "Always off";
-    const t = fn.type || "always_off";
-    let s = FN_LABEL[t] || t;
-    const p = fn.param;
+  fnText(fn) {
+    const f = funcOf(fn), t = fn?.type, n = Number(fn?.param);
     if (t === "temperature" || t === "ph") {
-      const pr = this.cfg.probes.find((x) => x.id === p);
-      s += ` · ${pr ? pr.name || pr.id : "?"} · ${t === "temperature" ? (fn.mode === "cooler" ? "Cooler" : "Heater") : (fn.mode === "down" ? "Control downwards" : "Control upwards")}`;
-    } else if (!["always_off", "always_on"].includes(t)) s += ` ${p || "?"}`;
-    return s;
-  }
-
-  fnParamOptions(t) {
-    const L = this.limits;
-    const named = (sec, n, fallback) => { const it = this.item(sec, n); return `${fallback} ${n}${it && it.name ? " · " + it.name : ""}`; };
-    switch (t) {
-      case "temperature": return this.cfg.probes.filter((p) => p.kind === "temperature").map((p) => [p.id, p.name || p.id]);
-      case "ph": return this.cfg.probes.filter((p) => p.kind === "ph").map((p) => [p.id, p.name || p.id]);
-      case "timer": return range(1, L.timers).filter((n) => this.item("timers", n).mode === "normal").map((n) => [n, named("timers", n, "Timer")]);
-      case "illumination": return range(1, L.illumination).map((n) => [n, named("illumination", n, "Illumination")]);
-      case "filter": return range(1, L.feed_pauses).map((n) => [n, named("feed_pauses", n, "Filter")]);
-      case "maintenance": return range(1, L.maintenance).map((n) => [n, named("maintenance", n, "Maintenance")]);
-      case "fill_water": case "fill_ato": case "fill_awc": case "drain_water":
-        return range(1, L.level_circuits).map((n) => [n, named("level_circuits", n, "Control circuit")]);
-      case "logic": return range(1, L.logic).map((n) => [n, named("logic", n, "Programmable logic")]);
-      default: return [];
+      const p = this.probe(fn.param); if (!p) return `${f.label} · choose a probe`;
+      const [lo, hi] = this.points(p), u = this.unit(p);
+      return `${f.label} · ${p.name || p.id} ${fmt(lo)}–${fmt(hi)}${u}`;
     }
+    if (t === "timer") { const x = this.item("timers", n); return `Schedule · ${x?.name || "Timer " + n}${x ? " · " + this.periodsText(x.entries) : ""}`; }
+    if (t === "illumination") { const x = this.item("illumination", n); return `Light · ${x?.name || "Light " + n}${x ? " · " + this.periodsText(x.entries) : ""}`; }
+    if (t === "filter") { const x = this.item("feed_pauses", n); return `Off during ${x?.name || "Feed pause " + n}`; }
+    if (t === "maintenance") { const x = this.item("maintenance", n); return `On during ${x?.name || "Maintenance " + n}`; }
+    if (LEVEL_TYPES.includes(t)) { const x = this.item("level_circuits", n); return `${f.label} · ${x?.name || LEVEL[x?.mode]?.label || "Circuit " + n}`; }
+    if (t === "logic") { const x = this.item("logic", n); return `Logic · ${x?.name || "Gate " + n}`; }
+    return f.label;
+  }
+  periodsText(entries) { const e = (entries || []).filter((x) => x.on); if (!e.length) return "no times"; return e.slice(0, 2).map((x) => (x.off ? `${x.on}–${x.off}` : x.on)).join(", ") + (e.length > 2 ? ` +${e.length - 2}` : ""); }
+  whyText(c) {
+    const s = this.st(["channels", c.n], {}); const fn = c.fn || {}; const t = fn.type;
+    if (!s.reason) return "";
+    if (s.reason === "manual override") return "Manual override";
+    if (s.reason === "maintenance") return "Held by maintenance";
+    if (s.reason === "blackout delay") return "Blackout delay";
+    if (String(s.reason).startsWith("fallback")) return "No data — fallback";
+    if (t === "temperature" || t === "ph") { const p = this.probe(fn.param); const v = this.st(["probes", fn.param, "value"]); return v == null ? "" : `${p?.name || "Probe"} ${fmt(v)}${this.unit(p)}`; }
+    if (t === "filter") return this.st(["feed_pauses", fn.param]) ? "Feed pause running" : "";
+    if (t === "fill_water") return this.st(["level", fn.param, "error"]) ? "Circuit alarm" : "";
+    return "";
   }
 
-  fnEditor(base, fn, allowInvert = false) {
-    const t = fn.type || "always_off";
-    const types = this.limits.fn_types.map((x) => [x, FN_LABEL[x] || x]);
-    let h = this.row("Function", this.sel_(`${base}.type`, types, t, 'data-rerender="1"'));
-    const opts = this.fnParamOptions(t);
-    if (opts.length || ["temperature", "ph"].includes(t)) {
-      h += this.row(t === "temperature" || t === "ph" ? "Probe" : "Number",
-        opts.length ? this.sel_(`${base}.param`, [["", "— choose —"], ...opts], fn.param) : `<em>Add a ${t === "ph" ? "pH" : "temperature"} probe under Sensors first</em>`);
-    }
-    if (t === "temperature") h += this.row("Type", this.sel_(`${base}.mode`, [["heater", "Heater"], ["cooler", "Cooler"]], fn.mode || "heater"));
-    if (t === "ph") h += this.row("Direction", this.sel_(`${base}.mode`, [["up", "Control upwards (increase)"], ["down", "Control downwards (decrease)"]], fn.mode || "up"));
-    if (allowInvert) h += this.row("Invert", this.chk(`${base}.invert`, fn.invert));
-    return h;
+  // ------------------------------------------------------------------ small UI pieces
+  icon(i, cls = "") { return `<ha-icon class="${cls}" icon="${i}"></ha-icon>`; }
+  pill(on, a = "ON", b = "OFF") { return on == null ? `<span class="pill unk">—</span>` : `<span class="pill ${on ? "on" : "off"}">${on ? a : b}</span>`; }
+  sec(t, right = "") { return `<div class="sec"><span>${esc(t)}</span>${right}</div>`; }
+  btn(act, label, data = {}, cls = "", icon = "") {
+    const d = Object.entries(data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ");
+    return `<button type="button" class="btn ${cls}" data-act="${act}" ${d}${!label ? ` aria-label="${esc(act)}"` : ""}>${icon ? this.icon(icon) : ""}${label ? `<span>${esc(label)}</span>` : ""}</button>`;
+  }
+  empty(icon, title, text, action = "") { return `<div class="empty">${this.icon(icon)}<b>${esc(title)}</b><p>${text}</p>${action}</div>`; }
+  timeline(entries, mode = "normal", color = "#0069b4") {
+    const now = new Date(); const nm = now.getHours() * 60 + now.getMinutes();
+    let blocks = "";
+    (entries || []).forEach((e) => {
+      const a = hm(e.on), b = hm(e.off);
+      if (a == null) return;
+      if (mode === "event" || b == null) { blocks += `<i class="tick" style="left:${(a / 1440) * 100}%;background:${esc(color)}"></i>`; return; }
+      const seg = (x, y) => `<i style="left:${(x / 1440) * 100}%;width:${((y - x) / 1440) * 100}%;background:${esc(color)}"></i>`;
+      blocks += a < b ? seg(a, b) : seg(a, 1440) + seg(0, b);
+    });
+    return `<div class="tl" aria-hidden="true">${blocks}<b class="now" style="left:${(nm / 1440) * 100}%"></b></div><div class="tlx"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>`;
+  }
+  bandBar(p) {
+    const v = this.st(["probes", p.id, "value"]); const n = Number(p.nominal || 0);
+    const dev = Number(p.alarm?.deviation || 0) || Number(p.hysteresis || 0.5) * 3 || 1;
+    const lo = n - dev * 1.6, hi = n + dev * 1.6, pct = (x) => Math.max(0, Math.min(100, ((x - lo) / (hi - lo)) * 100));
+    const [a, b] = this.points(p);
+    const al = p.alarm?.active ? `<i class="alm" style="left:0;width:${pct(n - dev)}%"></i><i class="alm" style="left:${pct(n + dev)}%;right:0"></i>` : "";
+    return `<div class="band" aria-hidden="true">${al}<i class="ctl" style="left:${pct(a)}%;width:${Math.max(1, pct(b) - pct(a))}%"></i>${v == null ? "" : `<b style="left:${pct(v)}%"></b>`}</div>`;
+  }
+  stateChip(p) {
+    const v = this.st(["probes", p.id, "value"]), al = this.st(["probes", p.id, "alarm"]);
+    if (!p.entity) return `<span class="chip warn">No sensor</span>`;
+    if (v == null) return `<span class="chip bad">No data</span>`;
+    return al ? `<span class="chip bad">Alarm</span>` : `<span class="chip ok">In range</span>`;
   }
 
-  entriesEditor(sec, i, entries, eventMode = false) {
-    const rows = (entries || []).map((e, k) => `<div class="entry">
-      ${eventMode ? `Start at ${this.txt(`${sec}.${i}.entries.${k}.on`, e.on, "08:00", "time")}`
-        : `ON ${this.txt(`${sec}.${i}.entries.${k}.on`, e.on, "08:00", "time")} OFF ${this.txt(`${sec}.${i}.entries.${k}.off`, e.off, "20:00", "time")}`}
-      ${this.btn("entry_del", "Remove", `${sec}|${i}|${k}`, "small ghost")}</div>`).join("");
-    return `${rows || "<em>No times yet</em>"}<div>${this.btn("entry_add", "Add", `${sec}|${i}`, "small")}</div>`;
+  // entity picker — search filters in place, no re-render
+  picker(path, cur, domains, emptyLabel = "Choose a device…") {
+    const list = Object.keys(this._hass.states).filter((e) => domains.includes(e.split(".")[0]));
+    const groups = {};
+    list.forEach((e) => { const g = this.edev(e) || "Other"; (groups[g] = groups[g] || []).push(e); });
+    const gk = Object.keys(groups).sort((a, b) => (a === "Other") - (b === "Other") || a.localeCompare(b));
+    const sel = cur ? `<div class="pk-cur">${this.icon("mdi:check-circle", "okc")}<div><b>${esc(this.ename(cur))}</b><small>${esc([this.edev(cur), cur].filter(Boolean).join(" · "))}</small></div><span class="st">${esc(this._hass.states[cur]?.state ?? "missing")}</span></div>` : `<div class="pk-cur none">${esc(emptyLabel)}</div>`;
+    return `<div class="picker">${sel}
+      <input class="pk-q" placeholder="Search ${list.length} by name, device or id" data-pkq="1" aria-label="Search">
+      <div class="pk-list">${cur ? `<div class="pk-i clear" data-act="pick" data-path="${path}" data-v="">${this.icon("mdi:close")}<span>Clear</span></div>` : ""}
+      ${gk.map((g) => `<div class="pk-g">${esc(g)}</div>${groups[g].sort((a, b) => this.ename(a).localeCompare(this.ename(b))).map((e) => `<div class="pk-i ${e === cur ? "sel" : ""}" data-act="pick" data-path="${path}" data-v="${esc(e)}" data-s="${esc((this.ename(e) + " " + e + " " + g).toLowerCase())}"><span class="nm">${esc(this.ename(e))}<small>${esc(e)}</small></span><span class="st">${esc(this._hass.states[e]?.state ?? "")}</span></div>`).join("")}`).join("")}</div></div>`;
   }
 
-  // ------------------------------------------------------------ events
-  _change(e) {
+  // controls bound to the drawer draft (data-d) or a page form (data-f="form|path")
+  ctl(kind, bind, v, opt = {}) {
+    const a = `${bind} ${opt.r ? 'data-r="1"' : ""}`;
+    if (kind === "text") return `<input type="text" ${a} value="${esc(v)}" placeholder="${esc(opt.ph || "")}">`;
+    if (kind === "time") return `<input type="time" ${a} value="${esc(v)}">`;
+    if (kind === "date") return `<input type="date" ${a} value="${esc(v)}">`;
+    if (kind === "color") return `<input type="color" ${a} value="${esc(v)}">`;
+    if (kind === "num") return `<span class="num"><input type="number" ${a} data-k="num" value="${esc(v)}" step="${opt.step || "any"}" ${opt.min != null ? `min="${opt.min}"` : ""} ${opt.max != null ? `max="${opt.max}"` : ""}>${opt.u ? `<em>${esc(opt.u)}</em>` : ""}</span>`;
+    if (kind === "bool") return `<label class="sw"><input type="checkbox" ${a} data-k="bool" ${v ? "checked" : ""}><span></span></label>`;
+    if (kind === "select") return `<select ${a} ${opt.numeric ? 'data-k="num"' : ""}>${opt.options.map(([o, l]) => `<option value="${esc(o)}" ${String(o) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+    if (kind === "seg") return `<div class="seg" role="group">${opt.options.map(([o, l]) => `<button type="button" class="${String(o) === String(v) ? "on" : ""}" aria-pressed="${String(o) === String(v)}" data-act="seg" ${bind} data-v="${esc(o)}" ${opt.numeric ? 'data-k="num"' : ""}>${esc(l)}</button>`).join("")}</div>`;
+    return "";
+  }
+  d(path) { return `data-d="${path}"`; }
+  f(form, path) { return `data-f="${form}|${path}"`; }
+  field(label, control, hint = "") { return `<div class="fld"><span class="fl">${esc(label)}${hint ? `<small>${hint}</small>` : ""}</span><span class="fc">${control}</span></div>`; }
+
+  // ------------------------------------------------------------------ events
+  _input(e, committed) {
     const el = e.target;
-    const bind = el.dataset.bind;
-    if (!bind) return;
-    let v;
-    if (el.dataset.kind === "bool") v = el.checked;
-    else if (el.dataset.kind === "num") v = el.value === "" ? 0 : Number(el.value);
-    else if (el.dataset.kind === "weekday") {
-      const [path, d] = [bind, Number(el.dataset.day)];
-      const cur = new Set(this.getPath(path) || []);
-      if (el.checked) cur.add(d); else cur.delete(d);
-      this.setPath(path, [...cur].sort());
-      return this._render();
-    } else if (el.dataset.kind === "multi") {
-      v = [...el.selectedOptions].map((o) => o.value);
-    } else v = el.value;
-    if (/\.(param|ch|timer|ato_timer|wc_timer|sensor1|sensor2)$/.test(bind) && /^\d+$/.test(String(v))) v = Number(v);
-    this.setPath(bind, v);
-    if (/\.fn\.type$|\.in[12]\.type$/.test(bind)) {
-      const base = bind.replace(/\.type$/, "");
-      const opts = this.fnParamOptions(v);
-      this.setPath(base + ".param", opts.length ? opts[0][0] : 0);
-      this.setPath(base + ".mode", v === "temperature" ? "heater" : v === "ph" ? "up" : "");
+    if (el.dataset?.pkq !== undefined) {
+      const q = el.value.trim().toLowerCase(); const box = el.closest(".picker");
+      box.querySelectorAll(".pk-i[data-s]").forEach((i) => (i.style.display = !q || i.dataset.s.includes(q) ? "" : "none"));
+      box.querySelectorAll(".pk-g").forEach((g) => { let n = g.nextElementSibling, any = false; while (n && n.classList.contains("pk-i")) { if (n.style.display !== "none") any = true; n = n.nextElementSibling; } g.style.display = any ? "" : "none"; });
+      return;
     }
-    if (el.dataset.rerender) this._render(); else this._renderBar();
+    if (el.dataset?.notify !== undefined) {
+      if (!committed) return;
+      const F = this.forms.notify; const s = new Set(F.draft.notify.targets || []);
+      el.checked ? s.add(el.dataset.notify) : s.delete(el.dataset.notify);
+      F.draft.notify.targets = [...s]; F.dirty = true; this._formBar("notify"); return;
+    }
+    const bind = el.dataset?.d ? ["d", el.dataset.d] : el.dataset?.f ? ["f", el.dataset.f] : null;
+    if (!bind) return;
+    if (!committed && (el.tagName === "SELECT" || el.type === "checkbox")) return;
+    let v = el.type === "checkbox" ? el.checked : el.value;
+    if (el.dataset.k === "num" && el.type !== "checkbox") v = v === "" ? 0 : Number(v);
+    this._set(bind, v, committed && !!el.dataset.r);
+  }
+  _set([kind, path], v, rerender) {
+    if (kind === "d") { setp(this.drawer.draft, path, v); this.drawer.dirty = true; }
+    else { const [form, p] = path.split("|"); setp(this.forms[form].draft, p, v); this.forms[form].dirty = true; }
+    if (rerender) (kind === "d" ? this._renderDrawer() : this._render());
+    else if (kind === "d") this._drawerBar();
+    else this._formBar(path.split("|")[0]);
+    if (kind === "d") this._schedulePreview();
   }
 
   async _click(e) {
-    const b = e.target.closest("[data-act],[data-nav],[data-open],[data-tab]");
-    if (!b) return;
-    if (b.dataset.nav) {
-      if (this.dirty.size && !confirm("Discard unsaved changes on this page?")) return;
-      if (this.dirty.size) { this.cfg = clone(this.saved); this.dirty.clear(); }
-      this.page = b.dataset.nav; this.sel = null; this.msg = ""; this.tab = 1; return this._render();
-    }
-    if (b.dataset.open !== undefined) { this.sel = b.dataset.open === "" ? null : Number(b.dataset.open) || b.dataset.open; return this._render(); }
-    if (b.dataset.tab) { this.tab = Number(b.dataset.tab); return this._render(); }
-    const act = b.dataset.act, n = b.dataset.n, value = b.dataset.value;
-    if (act === "save") return this._save();
-    if (act === "revert") { this.cfg = clone(this.saved); this.dirty.clear(); this.msg = ""; return this._render(); }
-    if (act === "entry_add" || act === "entry_del") {
-      const [sec, i, k] = n.split("|");
-      const list = this.cfg[sec][Number(i)].entries || (this.cfg[sec][Number(i)].entries = []);
-      if (act === "entry_add") list.push({ on: "08:00", off: "20:00" }); else list.splice(Number(k), 1);
-      this.dirty.add(sec); return this._render();
-    }
-    if (act === "probe_add") {
-      const used = new Set(this.cfg.probes.map((p) => p.id));
-      let i = 1; while (used.has(`p${i}`)) i++;
-      this.cfg.probes.push({ id: `p${i}`, name: "", kind: "temperature", entity: "", unit: "°F", nominal: 77, hysteresis: 0.36,
-        alarm: { active: true, deviation: 2, no_alarm_on_wc: false, deactivate_control: false } });
-      this.dirty.add("probes"); this.sel = `p${i}`; return this._render();
-    }
-    if (act === "probe_del") { this.cfg.probes = this.cfg.probes.filter((p) => p.id !== n); this.dirty.add("probes"); this.sel = null; return this._render(); }
-    if (act === "sock_add") { const i = this.idx("maintenance", Number(n)); this.cfg.maintenance[i].sockets.push({ ch: 1, state: "off" }); this.dirty.add("maintenance"); return this._render(); }
-    if (act === "sock_del") { const [m, k] = n.split("|"); this.cfg.maintenance[this.idx("maintenance", Number(m))].sockets.splice(Number(k), 1); this.dirty.add("maintenance"); return this._render(); }
-    if (act === "start_date_today") { const [sec, i, key] = n.split("|"); this.setPath(`${sec}.${i}.${key}`, new Date().toISOString().slice(0, 10)); return this._render(); }
-    // runtime actions
-    const map = { fp_start: "start_feed_pause", fp_stop: "stop_feed_pause", mt_start: "start_maintenance", mt_stop: "stop_maintenance",
-      wc_start: "start_water_change", wc_stop: "stop_water_change", lvl_reset: "reset_level_error", rem_ack: "acknowledge_reminder",
-      override: "manual_override", ch_manual: "channel_manual", hours_reset: "reset_hours" };
-    if (map[act]) {
-      if (this.dirty.size) { this.msg = "Save or revert your changes first."; return this._render(); }
-      const msg = { type: "sentinel_controller/action", action: map[act] };
-      if (n !== "") msg.n = Number(n);
-      if (value !== "") msg.value = value === "true" ? true : value === "false" ? false : value;
-      try {
-        const r = await this._hass.callWS(msg);
-        this.cfg = r.config; this.saved = clone(r.config); this.status = r.status; this.msg = "";
-      } catch (err) { this.msg = err.message || String(err); }
-      return this._render();
-    }
-  }
-
-  async _save() {
-    const secs = [...this.dirty];
-    try {
-      for (const s of secs) {
-        const r = await this._hass.callWS({ type: "sentinel_controller/save", section: s, value: this.cfg[s] });
-        this.status = r.status;
-        this.saved = clone(r.config);
-      }
-      this.cfg = clone(this.saved); this.dirty.clear(); this.msg = "Saved.";
-    } catch (err) { this.msg = `Not saved: ${err.message || err}`; }
-    this._render();
-  }
-
-  // ------------------------------------------------------------ render
-  _renderBar() {
-    const bar = this.shadowRoot.querySelector(".savebar");
-    if (bar) bar.outerHTML = this._bar();
-  }
-  _bar() {
-    return `<div class="savebar ${this.dirty.size ? "dirty" : ""}">${this.dirty.size ? `<span>Unsaved changes</span>${this.btn("revert", "Revert", "", "ghost")}${this.btn("save", "Save", "", "primary")}` : `<span>${esc(this.msg)}</span>`}</div>`;
-  }
-  _renderLive() {
-    this.shadowRoot.querySelectorAll("[data-live]").forEach((el) => {
-      const [kind, n] = el.dataset.live.split(":");
-      if (kind === "ch") { const s = this.st(["channels", n]); el.innerHTML = s ? this.pill(s.out) : ""; }
-      if (kind === "probe") { const v = this.st(["probes", n, "value"]); el.textContent = v == null ? "—" : v; }
-      if (kind === "sensor") { const v = this.st(["level_sensors", n]); el.innerHTML = this.pill(v, "WATER", "DRY"); }
-    });
-  }
-
-  _render() {
-    const root = this.shadowRoot;
-    if (this.err) { root.innerHTML = `${STYLE}<ha-card><div class="pad err">${esc(this.err)}</div></ha-card>`; return; }
-    if (!this.cfg) { root.innerHTML = `${STYLE}<ha-card><div class="pad">Loading…</div></ha-card>`; return; }
-    const alarms = this.st(["alarms"], []);
-    const nav = MENU.map(([k, l, icon]) => `<div class="nav ${this.page === k ? "act" : ""}" data-nav="${k}"><ha-icon icon="${icon}"></ha-icon><span>${l}</span></div>`).join("");
-    const fn = this["p_" + this.page]; const page = fn ? fn.call(this) : "";
-    const focus = root.activeElement?.dataset?.bind;
-    root.innerHTML = `${STYLE}<ha-card>
-      <div class="head"><div class="title">Sentinel Controller</div>
-        <div class="bell ${alarms.length ? "alarm" : ""}" data-nav="dashboard" title="${esc(alarms.map((a) => a.text).join("\n"))}"><ha-icon icon="mdi:bell${alarms.length ? "-ring" : ""}"></ha-icon>${alarms.length ? `<b>${alarms.length}</b>` : ""}</div></div>
-      <div class="wrap"><div class="menu">${nav}</div><div class="main">${this._bar()}${page}</div></div></ha-card>`;
-    if (focus) { const el = root.querySelector(`[data-bind="${CSS.escape(focus)}"]`); if (el) el.focus(); }
-  }
-
-  // ------------------------------------------------------------ pages
-  p_dashboard() {
-    const al = this.st(["alarms"], []);
-    const probes = this.cfg.probes.map((p) => {
-      const v = this.st(["probes", p.id, "value"]); const bad = this.st(["probes", p.id, "alarm"]);
-      return `<div class="tile ${bad ? "bad" : ""}"><div class="big" data-live="probe:${p.id}">${v == null ? "—" : v}</div><div>${esc(p.name || p.id)} ${esc(p.unit || "")}</div><small>nominal ${esc(p.nominal)} · hyst ${esc(p.hysteresis)}</small></div>`;
-    }).join("") || `<em>No probes yet. Add them under Sensors.</em>`;
-    const fps = this.cfg.feed_pauses.map((f) => {
-      const end = this.st(["feed_pauses", f.n]);
-      return `<div class="tile">${esc(f.name || "Feed pause " + f.n)}<small>${end ? "ends in " + this.remaining(end) : f.minutes + " min"}</small>${end ? this.btn("fp_stop", "Stop", f.n, "warn") : this.btn("fp_start", "Start", f.n, "primary")}</div>`;
-    }).join("");
-    const mts = this.cfg.maintenance.map((m) => {
-      const s = this.st(["maintenance", m.n]);
-      return `<div class="tile">${esc(m.name || "Maintenance " + m.n)}<small>${s ? (s.power ? "power cut program" : "ends in " + this.remaining(s.end)) : m.minutes + " min · " + m.sockets.length + " socket(s)"}</small>${s ? this.btn("mt_stop", "Stop", m.n, "warn") : this.btn("mt_start", "Start", m.n, "primary")}</div>`;
-    }).join("");
-    const chs = this.cfg.channels.filter((c) => c.entity).map((c) => {
-      const s = this.st(["channels", c.n], {});
-      const ov = this.cfg.manual_override ? `${this.btn("ch_manual", "ON", c.n, s.out ? "primary small" : "ghost small", "true")}${this.btn("ch_manual", "OFF", c.n, !s.out ? "primary small" : "ghost small", "false")}` : "";
-      return `<div class="chrow" data-nav-ch="${c.n}"><b>${c.n}</b><span class="grow">${esc(c.name || c.entity)}<small>${esc(this.fnSummary(c.fn))}${s.reason && s.reason !== c.fn?.type ? " · " + esc(s.reason) : ""}</small></span>
-        <span data-live="ch:${c.n}">${this.pill(s.out)}</span><small class="act">${s.actual == null ? "device n/a" : "device " + (s.actual ? "on" : "off")}</small>${ov}</div>`;
-    }).join("") || `<em>No switch channels have a device yet. Assign them under Switch channels.</em>`;
-    const lv = this.cfg.level_circuits.filter((c) => c.mode !== "off").map((c) => {
-      const s = this.st(["level", c.n], {});
-      const wc = ["wc", "ato_wc"].includes(c.mode);
-      return `<div class="chrow"><b>${c.n}</b><span class="grow">${esc(c.name || LEVEL_LABEL[c.mode])}<small>${esc(LEVEL_LABEL[c.mode])}${s.phase ? " · water change: " + s.phase : ""}${s.error ? " · ERROR: " + esc(s.error) : ""}</small></span>
-        ${wc ? (s.phase ? this.btn("wc_stop", "Stop WC", c.n, "warn small") : this.btn("wc_start", "Start WC", c.n, "small")) : ""}${s.error ? this.btn("lvl_reset", "Reset error", c.n, "warn small") : ""}</div>`;
-    }).join("");
-    return `<h2>Dashboard</h2>
-      ${al.length ? `<div class="alarms">${al.map((a) => `<div>⚠ ${esc(a.text)} ${a.reminder ? this.btn("rem_ack", "Done", a.reminder, "small") : ""}</div>`).join("")}</div>` : `<div class="ok">No alarms</div>`}
-      <h3>Sensors</h3><div class="tiles">${probes}</div>
-      <h3>Feed pause</h3><div class="tiles">${fps}</div>
-      <h3>Maintenance</h3><div class="tiles">${mts}</div>
-      ${lv ? `<h3>Level control</h3><div class="list">${lv}</div>` : ""}
-      <h3>Switch channels ${this.cfg.manual_override ? `<span class="pill warn">MANUAL OVERRIDE</span>` : ""}</h3><div class="list">${chs}</div>`;
-  }
-
-  p_sensors() {
-    const list = this.cfg.probes.map((p) => `<div class="chrow click" data-open="${p.id}"><b>${esc(p.id)}</b><span class="grow">${esc(p.name || "(no description)")}<small>${esc(p.kind)} · ${esc(p.entity || "no source")}</small></span><span data-live="probe:${p.id}">${this.st(["probes", p.id, "value"]) ?? "—"}</span></div>`).join("");
-    let form = "";
-    const i = this.cfg.probes.findIndex((p) => p.id === this.sel);
-    if (i >= 0) {
-      const p = this.cfg.probes[i], b = `probes.${i}`;
-      const half = Number(p.hysteresis || 0) / 2, nom = Number(p.nominal || 0);
-      const lowOn = (nom - half).toFixed(2), highOn = (nom + half).toFixed(2);
-      form = `<div class="form"><h3>${esc(p.name || p.id)}</h3>
-        ${this.row("Description", this.txt(`${b}.name`, p.name, "Tank temperature"))}
-        ${this.row("Type", this.sel_(`${b}.kind`, [["temperature", "Temperature"], ["ph", "pH value"], ["other", "Other (alarm only)"]], p.kind, 'data-rerender="1"'))}
-        ${this.row("Source sensor", this.entSel(`${b}.entity`, ["sensor", "input_number", "number"], p.entity))}
-        ${this.row("Unit", this.txt(`${b}.unit`, p.unit, "°F"))}
-        ${this.row("Nominal value", this.num(`${b}.nominal`, p.nominal, "0.01"))}
-        ${this.row("Hysteresis", this.num(`${b}.hysteresis`, p.hysteresis, "0.01", 0), `Switch points: ${lowOn} / ${highOn} (nominal ± hysteresis ÷ 2)`)}
-        <h4>Alarm</h4>
-        ${this.row("Active", this.chk(`${b}.alarm.active`, p.alarm?.active))}
-        ${this.row("Max. deviation", this.num(`${b}.alarm.deviation`, p.alarm?.deviation, "0.01", 0), `Alarm below ${(nom - Number(p.alarm?.deviation || 0)).toFixed(2)} or above ${(nom + Number(p.alarm?.deviation || 0)).toFixed(2)}`)}
-        ${this.row("No alarm on water change", this.chk(`${b}.alarm.no_alarm_on_wc`, p.alarm?.no_alarm_on_wc))}
-        ${this.row("Deactivate control", this.chk(`${b}.alarm.deactivate_control`, p.alarm?.deactivate_control), "Turns this probe's heater/cooler/pH outlets OFF while outside the allowed deviation")}
-        <div class="right">${this.btn("probe_del", "Delete probe", p.id, "warn")}</div></div>`;
-    }
-    const lr = this.cfg.light_reduction || {};
-    const tprobes = this.cfg.probes.filter((p) => p.kind === "temperature");
-    return `<h2>Sensors</h2><div class="list">${list || "<em>No probes yet.</em>"}</div>
-      <div>${this.cfg.probes.length < this.limits.probes ? this.btn("probe_add", "Add probe", "", "primary") : ""}</div>${form}
-      <h3>Temperature-dependent light reduction</h3><div class="form">
-      ${this.row("Temperature probe", this.sel_("light_reduction.probe", [["", "— off —"], ...tprobes.map((p) => [p.id, p.name || p.id])], lr.probe))}
-      ${this.row("Shut-off limit (above nominal)", this.num("light_reduction.limit", lr.limit, "0.1", 0), "Illumination channels with light reduction enabled turn OFF for the rest of the day once this is reached")}</div>
-      <p class="hint">Data source and age rules are under System.</p>`;
-  }
-
-  p_channels() {
-    const tabs = [1, 2, 3].map((t) => `<div class="tab ${this.tab === t ? "act" : ""}" data-tab="${t}">${(t - 1) * 16 + 1}–${t * 16}</div>`).join("");
-    const start = (this.tab - 1) * 16 + 1;
-    const list = range(start, start + 15).map((n) => {
-      const c = this.item("channels", n), s = this.st(["channels", n], {});
-      return `<div class="chrow click ${this.sel === n ? "selrow" : ""}" data-open="${n}"><b>${n}</b><span class="grow">${esc(c.name || "Switch channel " + n)}<small>${esc(c.entity || "no device")} · ${esc(this.fnSummary(c.fn))}</small></span><span data-live="ch:${n}">${c.entity ? this.pill(s.out) : ""}</span></div>`;
-    }).join("");
-    let form = "";
-    const i = this.idx("channels", this.sel);
-    if (i >= 0) {
-      const c = this.cfg.channels[i], b = `channels.${i}`, s = this.st(["channels", c.n], {});
-      form = `<div class="form"><h3>Switch channel ${c.n}</h3>
-        ${this.row("Description", this.txt(`${b}.name`, c.name, "Heater"))}
-        ${this.row("Device (outlet)", this.entSel(`${b}.entity`, ["switch", "light", "fan", "input_boolean", "siren", "humidifier"], c.entity))}
-        ${this.fnEditor(`${b}.fn`, c.fn || {})}
-        <h4>Switching behavior</h4>
-        ${this.row("Invert", this.chk(`${b}.invert`, c.invert))}
-        ${this.row("Blackout delay (min)", this.num(`${b}.blackout_min`, c.blackout_min, "1", 0), "Stays OFF for this long after Home Assistant starts or power returns")}
-        ${this.row("Fallback state", this.sel_(`${b}.fallback`, [["off", "OFF"], ["on", "ON"]], c.fallback), "Used when the function has no data (probe offline, sensor unavailable)")}
-        ${this.row("Operating hours", `${s.hours ?? 0} h ${this.btn("hours_reset", "Reset", c.n, "small ghost")}`)}
-        ${this.row("Now", `${this.pill(s.out)} <small>${esc(s.reason || "")}</small>`)}</div>`;
-    }
-    return `<h2>Switch channels</h2><div class="tabs">${tabs}</div>
-      ${this.row("Activate manual override", `${this.btn("override", this.cfg.manual_override ? "ON — turn off" : "OFF — turn on", "", this.cfg.manual_override ? "warn" : "", this.cfg.manual_override ? "false" : "true")}`, "While on, every channel follows its manual ON/OFF (set on the Dashboard); it starts from each channel's current state")}
-      <div class="split"><div class="list">${list}</div>${form}</div>`;
-  }
-
-  p_timers() {
-    const list = range(1, this.limits.timers).map((n) => {
-      const t = this.item("timers", n), on = this.st(["timers", n]);
-      return `<div class="chrow click ${this.sel === n ? "selrow" : ""}" data-open="${n}"><b>${n}</b><span class="grow">${esc(t.name || "Timer " + n)}<small>${t.mode === "event" ? "Event start" : "Normal"} · ${(t.entries || []).length} time(s)</small></span>${t.mode === "normal" && (t.entries || []).length ? this.pill(on) : ""}</div>`;
-    }).join("");
-    let form = "";
-    const i = this.idx("timers", this.sel);
-    if (i >= 0) {
-      const t = this.cfg.timers[i], b = `timers.${i}`;
-      const days = t.day_mode === "interval"
-        ? `${this.row("Repeat every (days)", this.num(`${b}.every_days`, t.every_days, "1", 1))}${this.row("Starting on", `${this.txt(`${b}.start_date`, t.start_date, "", "date")} ${this.btn("start_date_today", "Today", `timers|${i}|start_date`, "small ghost")}`)}`
-        : this.row("Days", WD.map((d, k) => `<label class="wd"><input type="checkbox" data-bind="${b}.weekdays" data-kind="weekday" data-day="${k}" ${(t.weekdays || []).includes(k) ? "checked" : ""}>${d}</label>`).join(""));
-      form = `<div class="form"><h3>Timer ${t.n}</h3>
-        ${this.row("Description", this.txt(`${b}.name`, t.name, "Skimmer"))}
-        ${this.row("Switch mode", this.sel_(`${b}.mode`, [["normal", "Normal (ON/OFF)"], ["event", "Event start"]], t.mode, 'data-rerender="1"'), t.mode === "event" ? "Event start activates a feed pause or water change that selects this timer" : "")}
-        <h4>Schedule</h4>${this.entriesEditor("timers", i, t.entries, t.mode === "event")}
-        ${this.row("Day mode", this.sel_(`${b}.day_mode`, [["weekdays", "Special weekdays"], ["interval", "Day intervals"]], t.day_mode, 'data-rerender="1"'))}
-        ${days}</div>`;
-    }
-    return `<h2>Processes · Timers</h2><div class="split"><div class="list scroll">${list}</div>${form}</div>`;
-  }
-
-  p_illumination() {
-    const list = range(1, this.limits.illumination).map((n) => {
-      const c = this.item("illumination", n);
-      return `<div class="chrow click ${this.sel === n ? "selrow" : ""}" data-open="${n}"><b style="color:${esc(c.color)}">${n}</b><span class="grow">${esc(c.name || "Illumination " + n)}<small>${(c.entries || []).length} period(s)${c.temp_reduction ? " · light reduction" : ""}</small></span>${(c.entries || []).length ? this.pill(this.st(["illumination", n])) : ""}</div>`;
-    }).join("");
-    let form = "";
-    const i = this.idx("illumination", this.sel);
-    if (i >= 0) {
-      const c = this.cfg.illumination[i], b = `illumination.${i}`;
-      form = `<div class="form"><h3>Illumination channel ${c.n} (non-dimmable)</h3>
-        ${this.row("Description", this.txt(`${b}.name`, c.name, "T5 blue"))}
-        ${this.row("Color", this.txt(`${b}.color`, c.color, "", "color"))}
-        <h4>ON / OFF times</h4>${this.entriesEditor("illumination", i, c.entries)}
-        ${this.row("Temperature-dependent light reduction", this.chk(`${b}.temp_reduction`, c.temp_reduction), "Probe and limit are set under Sensors")}
-        <p class="hint">Assign this to an outlet under Switch channels → Function: Illumination ${c.n}.</p></div>`;
-    }
-    const lr = this.cfg.light_reduction || {};
-    return `<h2>Illumination channels</h2>${lr.probe ? `<p class="hint">Light reduction: OFF for the rest of the day at nominal + ${esc(lr.limit)}.${this.st(["light_reduction_today"]) ? " <b>Active today.</b>" : ""}</p>` : ""}
-      <div class="split"><div class="list scroll">${list}</div>${form}</div>`;
-  }
-
-  p_feed() {
-    const evTimers = range(1, this.limits.timers).filter((n) => this.item("timers", n).mode === "event");
-    return `<h2>Feed pause</h2>${this.cfg.feed_pauses.map((f, i) => {
-      const b = `feed_pauses.${i}`, end = this.st(["feed_pauses", f.n]);
-      return `<div class="form"><h3>Feed pause ${f.n} ${end ? `<span class="pill on">RUNNING ${this.remaining(end)}</span>` : ""}</h3>
-        ${this.row("Description", this.txt(`${b}.name`, f.name))}
-        ${this.row("Duration (min)", this.num(`${b}.minutes`, f.minutes, "1", 1, this.limits.feed_pause_max_min))}
-        ${this.row("Filter off", this.chk(`${b}.filter_off`, f.filter_off), `Outlets with function Filter ${f.n} turn OFF while this runs`)}
-        ${this.row("Timer activates", this.sel_(`${b}.timer`, [[0, "None (manual only)"], ...evTimers.map((n) => [n, `Timer ${n}${this.item("timers", n).name ? " · " + this.item("timers", n).name : ""}`])], f.timer), "Only Event start timers are listed")}
-        <div class="right">${end ? this.btn("fp_stop", "Stop", f.n, "warn") : this.btn("fp_start", "Start", f.n, "primary")}</div></div>`;
-    }).join("")}`;
-  }
-
-  p_maintenance() {
-    const chOpts = range(1, this.limits.channels).map((n) => [n, `${n} · ${this.item("channels", n).name || this.item("channels", n).entity || "Switch channel " + n}`]);
-    return `<h2>Maintenance / Power cut</h2>${this.cfg.maintenance.map((m, i) => {
-      const b = `maintenance.${i}`, s = this.st(["maintenance", m.n]);
-      const socks = (m.sockets || []).map((sk, k) => `<div class="entry">Socket ${this.sel_(`${b}.sockets.${k}.ch`, chOpts, sk.ch)} → ${this.sel_(`${b}.sockets.${k}.state`, [["off", "Turn OFF"], ["on", "Turn ON"]], sk.state)} ${this.btn("sock_del", "Remove", `${m.n}|${k}`, "small ghost")}</div>`).join("");
-      return `<div class="form"><h3>Maintenance ${m.n} ${s ? `<span class="pill on">${s.power ? "POWER CUT" : "RUNNING " + this.remaining(s.end)}</span>` : ""}</h3>
-        ${this.row("Description", this.txt(`${b}.name`, m.name))}
-        <h4>Sockets</h4>${socks || "<em>No sockets</em>"}<div>${this.btn("sock_add", "Add socket", m.n, "small")}</div>
-        ${this.row("Duration (min)", this.num(`${b}.minutes`, m.minutes, "1", 1, this.limits.maintenance_max_min), "240 minutes maximum")}
-        ${this.row("Activate this maintenance program during power cut", this.chk(`${b}.power_cut`, m.power_cut), "Power cut monitoring is set under System")}
-        ${m.power_cut ? this.row("When power returns", this.sel_(`${b}.after_power`, [["stop", "End the program"], ["run_duration", "Keep running for the duration above"]], m.after_power)) : ""}
-        <div class="right">${s ? this.btn("mt_stop", "Stop", m.n, "warn") : this.btn("mt_start", "Start", m.n, "primary")}</div></div>`;
-    }).join("")}`;
-  }
-
-  p_level() {
-    const ls = this.cfg.level_sensors.map((s, i) => {
-      const b = `level_sensors.${i}`;
-      return `<div class="form compact"><h4>Level sensor ${s.n} <span data-live="sensor:${s.n}">${s.entity ? this.pill(this.st(["level_sensors", s.n]), "WATER", "DRY") : ""}</span></h4>
-        ${this.row("Description", this.txt(`${b}.name`, s.name))}
-        ${this.row("Source", this.entSel(`${b}.entity`, ["binary_sensor", "sensor", "switch", "input_boolean"], s.entity))}
-        ${this.row("Water detected when state is", this.txt(`${b}.wet_states`, s.wet_states, "on"), "Comma separated. Ignored if the dry list is filled")}
-        ${this.row("…or dry when state is", this.txt(`${b}.dry_states`, s.dry_states, "Normal"), "e.g. the Mini leak sensor reports Normal when dry")}
-        ${this.row("Invert", this.chk(`${b}.invert`, s.invert), "Use for a return-pump low-level float")}
-        ${this.row("Reaction time (s)", this.num(`${b}.reaction_s`, s.reaction_s, "1", 0))}</div>`;
-    }).join("");
-    const sOpts = [[0, "— none —"], ...range(1, this.limits.level_sensors).map((n) => [n, `Sensor ${n}${this.item("level_sensors", n).name ? " · " + this.item("level_sensors", n).name : ""}`])];
-    const nTimers = range(1, this.limits.timers).filter((n) => this.item("timers", n).mode === "normal").map((n) => [n, `Timer ${n}`]);
-    const eTimers = range(1, this.limits.timers).filter((n) => this.item("timers", n).mode === "event").map((n) => [n, `Timer ${n}`]);
-    const circ = this.cfg.level_circuits.map((c, i) => {
-      const b = `level_circuits.${i}`, s = this.st(["level", c.n], {});
-      const two = ["minmax", "ato2", "wc", "ato_wc"].includes(c.mode), ato = ["ato", "minmax", "ato2", "ato_wc"].includes(c.mode), wc = ["wc", "ato_wc"].includes(c.mode);
-      const l1 = c.mode === "minmax" || wc ? "Sensor 1 (lower / min)" : "Sensor 1", l2 = c.mode === "minmax" || wc ? "Sensor 2 (upper / max)" : "Sensor 2";
-      return `<div class="form compact"><h4>Control circuit ${c.n} ${s.error ? `<span class="pill bad">ERROR</span>` : ""} ${s.phase ? `<span class="pill on">WC ${esc(s.phase)}</span>` : ""}</h4>
-        ${this.row("Operation mode", this.sel_(`${b}.mode`, this.limits.level_modes.map((m) => [m, LEVEL_LABEL[m]]), c.mode, 'data-rerender="1"'))}
-        ${c.mode === "off" ? "" : `
-        ${this.row("Description", this.txt(`${b}.name`, c.name, c.mode === "leak" ? "Leak detection (Sump)" : "ATO"))}
-        ${c.mode !== "leak" ? this.row("Maximum on-time (s)", this.num(`${b}.max_on_s`, c.max_on_s, "1", 0), "Failsafe: alarm and outlet OFF if exceeded. 0 disables") : ""}
-        ${this.row("Reset error automatically", this.chk(`${b}.auto_reset`, c.auto_reset))}
-        ${ato ? this.row("ATO always active", this.chk(`${b}.ato_always`, c.ato_always), "Off = ATO only while the selected Normal timer is ON") : ""}
-        ${ato && !c.ato_always ? this.row("ATO timer", this.sel_(`${b}.ato_timer`, [[0, "— choose —"], ...nTimers], c.ato_timer)) : ""}
-        ${wc ? this.row("Water change timer (Event start)", this.sel_(`${b}.wc_timer`, [[0, "None (manual only)"], ...eTimers], c.wc_timer)) : ""}
-        ${this.row(l1, this.sel_(`${b}.sensor1`, sOpts, c.sensor1))}
-        ${two ? this.row(l2, this.sel_(`${b}.sensor2`, sOpts, c.sensor2)) : ""}
-        <p class="hint">${c.mode === "leak" ? `Outlets with function Fill water ${c.n} stay ON and turn OFF while this reports a leak.` : ""}
-        ${ato ? `ATO pump outlet: function Fill water ATO only ${c.n}.` : ""} ${wc ? `AWC outlets: Drain water ${c.n} and Fill water AWC only ${c.n}. Sequence used: drain until sensor 1 is dry, then fill until sensor 2 detects water.` : ""}</p>
-        <div class="right">${wc ? (s.phase ? this.btn("wc_stop", "Stop water change", c.n, "warn") : this.btn("wc_start", "Start water change", c.n)) : ""}${s.error ? this.btn("lvl_reset", "Reset error", c.n, "warn") : ""}</div>`}</div>`;
-    }).join("");
-    return `<h2>Level control</h2><h3>Control circuits</h3><div class="grid2">${circ}</div><h3>Sensors</h3><div class="grid2">${ls}</div>`;
-  }
-
-  p_logic() {
-    const sum = (g) => {
-      const a = `${g.in1?.invert ? "NOT " : ""}${this.fnSummary(g.in1)}`;
-      if (g.op === "delayed_on" || g.op === "delayed_off") return `${OP_LABEL[g.op]} ${g.seconds}s (${a})`;
-      return `${a} ${OP_LABEL[g.op]} ${g.in2?.invert ? "NOT " : ""}${this.fnSummary(g.in2)}`;
+    const b = e.target.closest("[data-act],[data-tab]");
+    if (!b) { if (e.target.classList?.contains("scrim")) this._closeDrawer(); return; }
+    if (b.dataset.tab) { if (this.drawer && !(await this._closeDrawer())) return; this.tab = b.dataset.tab; return this._render(); }
+    const a = b.dataset.act, ds = b.dataset;
+    const run = async (action, n, value) => {
+      const m = { type: "sentinel_controller/action", action }; if (n != null && n !== "") m.n = Number(n); if (value !== undefined) m.value = value;
+      try { const r = await this._hass.callWS(m); this.cfg = r.config; this.status = r.status; this._render(); }
+      catch (err) { this._toast(err.message || String(err), true); }
     };
-    const tabs = [1, 2, 3, 4].map((t) => `<div class="tab ${this.tab === t ? "act" : ""}" data-tab="${t}">${(t - 1) * 8 + 1}–${t * 8}</div>`).join("");
-    const start = (Math.min(this.tab, 4) - 1) * 8 + 1;
-    const list = range(start, start + 7).map((n) => {
-      const g = this.item("logic", n);
-      return `<div class="chrow click ${this.sel === n ? "selrow" : ""}" data-open="${n}"><b>${n}</b><span class="grow">${esc(g.name || "Programmable logic " + n)}<small>${esc(sum(g))}</small></span>${this.pill(this.st(["logic", n]))}</div>`;
-    }).join("");
-    let form = "";
-    const i = this.idx("logic", this.sel);
-    if (i >= 0) {
-      const g = this.cfg.logic[i], b = `logic.${i}`, delayed = g.op === "delayed_on" || g.op === "delayed_off";
-      form = `<div class="form"><h3>Programmable logic ${g.n}</h3>
-        ${this.row("Description", this.txt(`${b}.name`, g.name))}
-        ${this.row("Operator", this.sel_(`${b}.op`, this.limits.logic_ops.map((o) => [o, OP_LABEL[o]]), g.op, 'data-rerender="1"'))}
-        <h4>Input${delayed ? "" : " 1"}</h4>${this.fnEditor(`${b}.in1`, g.in1 || {}, true)}
-        ${delayed ? this.row("Duration (s)", this.num(`${b}.seconds`, g.seconds, "1", 0), g.op === "delayed_on" ? "Output turns ON only after the input has been ON this long; OFF at once" : "Output turns ON at once; stays ON this long after the input goes OFF")
-          : `<h4>Input 2</h4>${this.fnEditor(`${b}.in2`, g.in2 || {}, true)}`}
-        <p class="hint">Assign to an outlet under Switch channels → Function: Programmable logic ${g.n}, or use it as an input of another gate.</p></div>`;
+    const D = this.drawer;
+    switch (a) {
+      case "open": return this._openDrawer(ds.kind, ds.n);
+      case "close": return this._closeDrawer();
+      case "save": return this._saveDrawer();
+      case "remove": return this._removeDrawer();
+      case "pick": return this._set(["d", ds.path], ds.v, true);
+      case "seg": { const v = ds.k === "num" ? Number(ds.v) : ds.v; return this._set(ds.d ? ["d", ds.d] : ["f", ds.f], v, true); }
+      case "fn": { const f = FUNCS.find((x) => x.key === ds.key); D.draft.fn = { type: f.type, mode: f.mode || "", param: this._defaultParam(f.type) }; D.dirty = true; this._renderDrawer(); return this._schedulePreview(); }
+      case "lvlmode": { D.draft.mode = ds.mode; D.dirty = true; return this._renderDrawer(); }
+      case "entry_add": { (D.draft.entries = D.draft.entries || []).push(D.draft.mode === "event" ? { on: "08:00", off: "" } : { on: "08:00", off: "20:00" }); D.dirty = true; return this._renderDrawer(); }
+      case "entry_del": { D.draft.entries.splice(Number(ds.i), 1); D.dirty = true; return this._renderDrawer(); }
+      case "wd": { const k = Number(ds.day), s = new Set(D.draft.weekdays || []); s.has(k) ? s.delete(k) : s.add(k); D.draft.weekdays = [...s].sort(); D.dirty = true; return this._renderDrawer(); }
+      case "wdpreset": { D.draft.weekdays = ds.p === "all" ? [0, 1, 2, 3, 4, 5, 6] : ds.p === "wk" ? [0, 1, 2, 3, 4] : [5, 6]; D.dirty = true; return this._renderDrawer(); }
+      case "sock_add": { const used = this.usedChannels(); (D.draft.sockets = D.draft.sockets || []).push({ ch: used[0]?.n || 1, state: "off" }); D.dirty = true; return this._renderDrawer(); }
+      case "sock_del": { D.draft.sockets.splice(Number(ds.i), 1); D.dirty = true; return this._renderDrawer(); }
+      case "today": { setp(D.draft, ds.path, new Date().toISOString().slice(0, 10)); D.dirty = true; return this._renderDrawer(); }
+      case "form_save": return this._saveForm(ds.form);
+      case "form_revert": { delete this.forms[ds.form]; return this._render(); }
+      case "fp": return run(ds.on === "1" ? "stop_feed_pause" : "start_feed_pause", ds.n);
+      case "mt": return run(ds.on === "1" ? "stop_maintenance" : "start_maintenance", ds.n);
+      case "wc": {
+        if (ds.on !== "1" && !confirm("Start a water change now? The drain pump starts.")) return;
+        return run(ds.on === "1" ? "stop_water_change" : "start_water_change", ds.n);
+      }
+      case "reset": return run("reset_level_error", ds.n);
+      case "ack": return run("acknowledge_reminder", ds.n);
+      case "hours": { await run("reset_hours", ds.n); if (this.drawer) this._renderDrawer(); return; }
+      case "override": {
+        const on = !this.cfg.manual_override;
+        if (on && !confirm("Turn on manual override?\n\nEvery outlet stops following its program and holds its current state until you switch it by hand.")) return;
+        return run("manual_override", null, on);
+      }
+      case "manual": return run("channel_manual", ds.n, ds.v === "on");
+      case "goto": {
+        if (this.drawer && !(await this._closeDrawer())) return;
+        this.tab = ds.tab; this._render(); if (ds.kind && ds.n) this._openDrawer(ds.kind, ds.n); return;
+      }
     }
-    return `<h2>Programmable logic</h2><div class="tabs">${tabs}</div><div class="split"><div class="list">${list}</div>${form}</div>`;
   }
 
-  p_reminders() {
-    return `<h2>Reminders</h2><div class="grid2">${this.cfg.reminders.map((r, i) => {
-      const b = `reminders.${i}`;
-      return `<div class="form compact"><h4>Reminder ${r.n}</h4>
-        ${this.row("Enabled", this.chk(`${b}.enabled`, r.enabled))}
-        ${this.row("Text", this.txt(`${b}.text`, r.text, "Replace carbon"))}
-        ${this.row("Remind in (days)", this.num(`${b}.days`, r.days, "1", 0))}
-        ${this.row("Counting from", `${this.txt(`${b}.start`, r.start, "", "date")} ${this.btn("start_date_today", "Today", `reminders|${i}|start`, "small ghost")}`)}
-        ${this.row("Repeat reminder", this.chk(`${b}.repeat`, r.repeat))}</div>`;
+  _defaultParam(type) {
+    if (type === "temperature") return this.cfg.probes.find((p) => p.kind === "temperature")?.id || "";
+    if (type === "ph") return this.cfg.probes.find((p) => p.kind === "ph")?.id || "";
+    if (type === "timer") return this.cfg.timers.find((t) => t.mode === "normal" && this.timerUsed(t))?.n || 1;
+    if (type === "illumination") return this.cfg.illumination.find((t) => this.timerUsed(t))?.n || 1;
+    if (LEVEL_TYPES.includes(type)) {
+      const want = { fill_water: ["leak", "ato", "minmax", "ato2", "wc", "ato_wc"], fill_ato: ["ato", "minmax", "ato2", "ato_wc"], fill_awc: ["wc", "ato_wc"], drain_water: ["wc", "ato_wc"] }[type];
+      return this.cfg.level_circuits.find((c) => want.includes(c.mode))?.n || 1;
+    }
+    if (type === "logic") return this.cfg.logic.find((g) => this.gateUsed(g))?.n || 1;
+    return ["filter", "maintenance"].includes(type) ? 1 : 0;
+  }
+
+  // ------------------------------------------------------------------ drawer
+  _openDrawer(kind, n) {
+    const secOf = { channel: "channels", probe: "probes", timer: "timers", light: "illumination", fp: "feed_pauses", mt: "maintenance", circuit: "level_circuits", lsensor: "level_sensors", gate: "logic", reminder: "reminders" }[kind];
+    let draft, idx, isNew = false;
+    if (kind === "probe") {
+      if (n === "new") {
+        const used = new Set(this.cfg.probes.map((p) => p.id)); let i = 1; while (used.has(`p${i}`)) i++;
+        draft = { id: `p${i}`, name: "", kind: "temperature", entity: "", unit: "", nominal: 77, hysteresis: 0.36, status_entity: "", status_ok: "Connected",
+          alarm: { active: true, deviation: 1.5, no_alarm_on_wc: false, deactivate_control: false } };
+        idx = -1; isNew = true;
+      } else { idx = this.cfg.probes.findIndex((p) => p.id === n); if (idx < 0) return; draft = clone(this.cfg.probes[idx]); }
+    } else {
+      idx = this.cfg[secOf].findIndex((x) => x.n === Number(n)); if (idx < 0) return;
+      draft = clone(this.cfg[secOf][idx]);
+      if (kind === "channel") { if (!draft.fn) draft.fn = { type: "always_off" }; isNew = !draft.entity && !draft.name; }
+      if (kind === "reminder" && !draft.text) { draft.enabled = true; draft.start = draft.start || new Date().toISOString().slice(0, 10); isNew = true; }
+      if ((kind === "timer" || kind === "light") && !this.timerUsed(draft)) isNew = true;
+      if (kind === "gate" && !this.gateUsed(draft)) isNew = true;
+      if (kind === "circuit" && draft.mode === "off") { isNew = true; draft.mode = "ato"; }
+      if (kind === "lsensor" && !draft.entity) isNew = true;
+    }
+    this.drawer = { kind, sec: secOf, idx, draft, dirty: false, isNew };
+    this.preview = null;
+    this._renderDrawer();
+    this._schedulePreview();
+    setTimeout(() => this.shadowRoot.querySelector(".drawer .x")?.focus(), 50);
+  }
+  async _closeDrawer() {
+    if (this.drawer?.dirty && !confirm("Discard your changes?")) return false;
+    this.drawer = null; this.shadowRoot.querySelector(".drawer-wrap")?.remove(); return true;
+  }
+  async _saveDrawer() {
+    const D = this.drawer; const err = this._validate(D);
+    if (err) return this._toast(err, true);
+    const list = clone(this.cfg[D.sec]);
+    if (D.kind === "probe" && D.idx < 0) list.push(D.draft); else list[D.idx] = D.draft;
+    try {
+      const r = await this._hass.callWS({ type: "sentinel_controller/save", section: D.sec, value: list });
+      this.cfg = r.config; this.status = r.status; this.drawer = null;
+      this.shadowRoot.querySelector(".drawer-wrap")?.remove();
+      this._toast("Saved"); this._render();
+    } catch (e) { this._toast(`Not saved: ${e.message || e}`, true); }
+  }
+  async _removeDrawer() {
+    const D = this.drawer;
+    if (!confirm("Remove this? It stops controlling anything.")) return;
+    let list = clone(this.cfg[D.sec]);
+    const blank = {
+      channel: (x) => ({ n: x.n, name: "", entity: "", fn: { type: "always_off", param: 0, mode: "" }, invert: false, blackout_min: 0, fallback: "off", manual: "off" }),
+      timer: (x) => ({ n: x.n, name: "", mode: "normal", entries: [], day_mode: "weekdays", weekdays: [0, 1, 2, 3, 4, 5, 6], every_days: 1, start_date: "" }),
+      light: (x) => ({ n: x.n, name: "", color: "#2196f3", entries: [], temp_reduction: false }),
+      gate: (x) => ({ n: x.n, name: "", op: "and", in1: { type: "always_off", param: 0, mode: "", invert: false }, in2: { type: "always_off", param: 0, mode: "", invert: false }, seconds: 1 }),
+      reminder: (x) => ({ n: x.n, text: "", days: 30, repeat: true, start: "", enabled: false }),
+      circuit: (x) => ({ ...x, name: "", mode: "off", sensor1: 0, sensor2: 0 }),
+      lsensor: (x) => ({ n: x.n, name: "", entity: "", wet_states: "on", dry_states: "", invert: false, reaction_s: 0 }),
+    };
+    if (D.kind === "probe") list = list.filter((p) => p.id !== D.draft.id);
+    else list[D.idx] = blank[D.kind](list[D.idx]);
+    try {
+      const r = await this._hass.callWS({ type: "sentinel_controller/save", section: D.sec, value: list });
+      this.cfg = r.config; this.status = r.status; this.drawer = null;
+      this.shadowRoot.querySelector(".drawer-wrap")?.remove();
+      this._toast("Removed"); this._render();
+    } catch (e) { this._toast(e.message || String(e), true); }
+  }
+  _validate(D) {
+    const d = D.draft;
+    if (D.kind === "channel") {
+      if (!d.entity) return "Choose the device this outlet switches.";
+      const dup = this.cfg.channels.find((c) => c.n !== d.n && c.entity === d.entity);
+      if (dup) return `${this.ename(d.entity)} is already ${this.chName(dup)}.`;
+      if (["temperature", "ph"].includes(d.fn.type) && !this.probe(d.fn.param)) return `Add a ${d.fn.type === "ph" ? "pH" : "temperature"} probe first (Probes tab).`;
+    }
+    if (D.kind === "probe") { if (!d.entity) return "Choose the sensor this probe reads."; if (!(Number(d.hysteresis) >= 0)) return "Hysteresis can't be negative."; }
+    if (D.kind === "timer" || D.kind === "light") {
+      if (!(d.entries || []).length) return "Add at least one time.";
+      for (const e of d.entries) if (hm(e.on) == null || (d.mode !== "event" && hm(e.off) == null)) return "Every period needs valid times.";
+      if (D.kind === "timer" && d.day_mode === "weekdays" && !(d.weekdays || []).length) return "Pick at least one day.";
+    }
+    if (D.kind === "fp" && !(d.minutes >= 1 && d.minutes <= this.L.feed_pause_max_min)) return `Feed pause length is 1–${this.L.feed_pause_max_min} minutes.`;
+    if (D.kind === "mt" && !(d.minutes >= 1 && d.minutes <= this.L.maintenance_max_min)) return `Maintenance length is 1–${this.L.maintenance_max_min} minutes.`;
+    if (D.kind === "circuit" && d.mode !== "off") { if (!d.sensor1) return "Choose sensor 1."; if (["minmax", "ato2", "wc", "ato_wc"].includes(d.mode) && !d.sensor2) return "This mode needs two sensors."; }
+    if (D.kind === "lsensor" && !d.entity) return "Choose the sensor.";
+    if (D.kind === "reminder" && d.enabled && !d.text) return "Write the reminder text.";
+    return "";
+  }
+  _schedulePreview() {
+    const D = this.drawer; if (!D || !["channel", "gate"].includes(D.kind)) return;
+    clearTimeout(this._pv);
+    this._pv = setTimeout(async () => {
+      const item = clone(D.draft); ["in1", "in2"].forEach((k) => item[k] && delete item[k].key);
+      try { this.preview = await this._hass.callWS({ type: "sentinel_controller/preview", kind: D.kind === "gate" ? "logic" : "channel", item }); }
+      catch (e) { this.preview = { error: e.message }; }
+      const el = this.shadowRoot.querySelector("[data-preview]"); if (el) el.innerHTML = this._previewHTML();
+    }, 250);
+  }
+  _previewHTML() {
+    const p = this.preview; if (!p) return `<span class="muted">Checking current data…</span>`;
+    if (p.error) return `<span class="muted">${esc(p.error)}</span>`;
+    const g = this.drawer?.kind === "gate";
+    const r = String(p.reason || "");
+    const extra = r.startsWith("fallback") ? " — data is missing, so it uses the fallback state" : r === "maintenance" ? " — a maintenance mode is holding it" : r === "manual override" ? " — manual override is on" : r === "blackout delay" ? " — blackout delay" : "";
+    return `${this.icon(p.out ? "mdi:power-plug" : "mdi:power-plug-off-outline", p.out ? "okc" : "muted")}<span>${g ? "This gate is" : "With these settings this outlet would be"} <b>${p.out == null ? "unknown" : p.out ? "ON" : "OFF"}</b> right now${esc(extra)}.</span>`;
+  }
+  _drawerBar() { const b = this.shadowRoot.querySelector(".dfoot .dirty"); if (b) b.textContent = this.drawer?.dirty ? "Unsaved changes" : ""; }
+
+  _renderDrawer() {
+    const D = this.drawer; if (!D) return;
+    const kindLabel = { channel: "Outlet", probe: "Probe", timer: "Schedule", light: "Light schedule", fp: "Feed pause", mt: "Maintenance", circuit: "Water · circuit", lsensor: "Water · sensor", gate: "Logic gate", reminder: "Reminder" }[D.kind];
+    const title = { channel: D.draft.name || `Outlet ${D.draft.n}`, probe: D.draft.name || (D.isNew ? "New probe" : D.draft.id), timer: D.draft.name || `Timer ${D.draft.n}`, light: D.draft.name || `Light ${D.draft.n}`, fp: D.draft.name || `Feed pause ${D.draft.n}`, mt: D.draft.name || `Maintenance ${D.draft.n}`, circuit: D.draft.name || `Circuit ${D.draft.n}`, lsensor: D.draft.name || `Sensor ${D.draft.n}`, gate: D.draft.name || `Gate ${D.draft.n}`, reminder: D.draft.text || `Reminder ${D.draft.n}` }[D.kind];
+    const body = this["d_" + D.kind].call(this, D.draft);
+    const canRemove = !D.isNew && !["fp", "mt"].includes(D.kind);
+    const html = `<div class="scrim"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <header><div><small>${esc(kindLabel)}${D.isNew ? " · new" : ""}</small><h2>${esc(title)}</h2></div>
+      <button type="button" class="x" data-act="close" aria-label="Close">${this.icon("mdi:close")}</button></header>
+      <div class="dbody">${body}</div>
+      <footer class="dfoot">${canRemove ? this.btn("remove", "Remove", {}, "ghost danger", "mdi:delete-outline") : ""}<span class="dirty">${D.dirty ? "Unsaved changes" : ""}</span>
+      ${this.btn("close", "Cancel", {}, "ghost")}${this.btn("save", D.isNew ? "Create" : "Save", {}, "primary")}</footer></aside>`;
+    let w = this.shadowRoot.querySelector(".drawer-wrap");
+    const scroll = w?.querySelector(".dbody")?.scrollTop || 0;
+    const focus = this.shadowRoot.activeElement?.dataset?.d;
+    if (!w) { w = document.createElement("div"); w.className = "drawer-wrap"; this.shadowRoot.appendChild(w); }
+    w.innerHTML = html;
+    w.querySelector(".dbody").scrollTop = scroll;
+    if (focus) w.querySelector(`[data-d="${focus}"]`)?.focus();
+    const p = w.querySelector("[data-preview]"); if (p) p.innerHTML = this._previewHTML();
+  }
+
+  // ---- drawer bodies
+  d_channel(d) {
+    const fsel = funcOf(d.fn);
+    const tiles = FUNCS.map((f) => `<button type="button" class="ftile ${f.key === fsel.key ? "on" : ""}" aria-pressed="${f.key === fsel.key}" data-act="fn" data-key="${f.key}">${this.icon(f.icon)}<b>${esc(f.label)}</b><small>${esc(f.desc)}</small></button>`).join("");
+    const s = this.st(["channels", d.n], {});
+    return `
+      ${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Heater" }))}
+      <div class="lbl">Device it switches</div>${this.picker("entity", d.entity, ["switch", "light", "fan", "input_boolean", "siren", "humidifier"], "Choose a plug, outlet or relay from any controller…")}
+      ${this._conflictNote(d)}
+      <div class="lbl">What should it do?</div><div class="ftiles">${tiles}</div>
+      <div class="detail">${this._fnDetail(d.fn, "fn")}</div>
+      <div class="preview" data-preview></div>
+      <details ${d.invert || d.blackout_min || d.fallback === "on" ? "open" : ""}><summary>Advanced</summary>
+        ${this.field("Invert", this.ctl("bool", this.d("invert"), d.invert), "Swap ON and OFF")}
+        ${this.field("If data is missing", this.ctl("seg", this.d("fallback"), d.fallback || "off", { options: [["off", "Turn OFF"], ["on", "Turn ON"]] }), "When the probe or sensor this outlet depends on goes offline")}
+        ${this.field("Blackout delay", this.ctl("num", this.d("blackout_min"), d.blackout_min, { step: 1, min: 0, u: "min" }), "Stay OFF this long after Home Assistant starts or power returns")}
+        ${this.field("Operating hours", `<span>${fmt(s.hours ?? 0, 1)} h</span>${this.btn("hours", "Reset", { n: d.n }, "ghost sm")}`)}
+      </details>`;
+  }
+  _conflictNote(d) {
+    if (!d.entity) return "";
+    const dup = this.cfg.channels.find((c) => c.n !== d.n && c.entity === d.entity);
+    if (dup) return `<div class="note bad">${this.icon("mdi:alert")}<span>Already used by ${esc(this.chName(dup))}.</span></div>`;
+    for (let i = 1; i <= 8; i++) if (this._hass.states[`input_boolean.outlet_${i}_used`]?.state === "on" && this._hass.states[`input_select.outlet_${i}_outlet`]?.state === d.entity)
+      return `<div class="note warn">${this.icon("mdi:alert")}<span>The Reef Ecosystem Outlets tab also drives this device. Remove it there, or Sentinel Controller won't switch it.</span></div>`;
+    return "";
+  }
+  _fnDetail(fn, base) {
+    const t = fn.type, P = (p) => `${base}.${p}`;
+    const opts = (list, empty) => (list.length ? list : [["", empty]]);
+    if (t === "temperature" || t === "ph") {
+      const ps = this.cfg.probes.filter((p) => p.kind === (t === "ph" ? "ph" : "temperature"));
+      if (!ps.length) return `<div class="note warn">${this.icon("mdi:information-outline")}<span>No ${t === "ph" ? "pH" : "temperature"} probe yet.</span>${this.btn("goto", "Add one", { tab: "probes", kind: "probe", n: "new" }, "link")}</div>`;
+      const p = this.probe(fn.param) || ps[0]; const [lo, hi] = this.points(p), u = this.unit(p), v = this.st(["probes", p.id, "value"]);
+      const lowOn = (t === "temperature" && fn.mode !== "cooler") || (t === "ph" && fn.mode !== "down");
+      return `${this.field("Probe", this.ctl("select", this.d(P("param")), p.id, { r: 1, options: ps.map((x) => [x.id, `${x.name || x.id}${this.edev(x.entity) ? " · " + this.edev(x.entity) : ""}`]) }))}
+        <p class="sentence">Turns <b>ON</b> at or ${lowOn ? "below" : "above"} <b>${fmt(lowOn ? lo : hi)}${esc(u)}</b> and <b>OFF</b> at or ${lowOn ? "above" : "below"} <b>${fmt(lowOn ? hi : lo)}${esc(u)}</b>. Now <b>${fmt(v)}${esc(u)}</b>.</p>
+        <p class="hint">Setpoint ${fmt(p.nominal)}${esc(u)}, hysteresis ${fmt(p.hysteresis)}${esc(u)} — set on the probe. ${this.btn("goto", "Change", { tab: "probes", kind: "probe", n: p.id }, "link")}${p.alarm?.deactivate_control ? " Turns off while the probe is in alarm." : ""}</p>`;
+    }
+    if (t === "timer") {
+      const ts = this.cfg.timers.filter((x) => x.mode === "normal" && this.timerUsed(x)); const x = this.item("timers", fn.param);
+      const nf = this.nextFree("timers", (y) => this.timerUsed(y));
+      return `${this.field("Timer", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, r: 1, options: opts(ts.map((y) => [y.n, `${y.name || "Timer " + y.n} · ${this.periodsText(y.entries)}`]), "No timers yet") }))}
+        ${x && this.timerUsed(x) && x.mode === "normal" ? this.timeline(x.entries) : ""}<p class="hint">${ts.length ? this.btn("goto", "Edit this schedule", { tab: "schedules", kind: "timer", n: x?.n || ts[0].n }, "link") : nf ? this.btn("goto", "Create a schedule", { tab: "schedules", kind: "timer", n: nf }, "link") : ""}</p>`;
+    }
+    if (t === "illumination") {
+      const ls = this.cfg.illumination.filter((y) => this.timerUsed(y)); const x = this.item("illumination", fn.param);
+      const nf = this.nextFree("illumination", (y) => this.timerUsed(y));
+      return `${this.field("Light schedule", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, r: 1, options: opts(ls.map((y) => [y.n, `${y.name || "Light " + y.n} · ${this.periodsText(y.entries)}`]), "No light schedules yet") }))}
+        ${x && this.timerUsed(x) ? this.timeline(x.entries, "normal", x.color) : ""}<p class="hint">${ls.length ? this.btn("goto", "Edit this light schedule", { tab: "schedules", kind: "light", n: x?.n || ls[0].n }, "link") : nf ? this.btn("goto", "Create a light schedule", { tab: "schedules", kind: "light", n: nf }, "link") : ""}</p>`;
+    }
+    if (t === "filter" || t === "maintenance") {
+      const sec = t === "filter" ? "feed_pauses" : "maintenance";
+      return `${this.field(t === "filter" ? "Feed pause" : "Maintenance mode", this.ctl("seg", this.d(P("param")), fn.param, { numeric: 1, options: this.cfg[sec].map((y) => [y.n, y.name || String(y.n)]) }))}
+        <p class="hint">${t === "filter" ? "Turns OFF while that feed pause runs, then back ON." : "ON only while that maintenance mode runs."}</p>`;
+    }
+    if (LEVEL_TYPES.includes(t)) {
+      const want = { fill_water: null, fill_ato: ["ato", "minmax", "ato2", "ato_wc"], fill_awc: ["wc", "ato_wc"], drain_water: ["wc", "ato_wc"] }[t];
+      const cs = this.cfg.level_circuits.filter((c) => c.mode !== "off" && (!want || want.includes(c.mode)));
+      return `${this.field("Level circuit", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, options: opts(cs.map((c) => [c.n, `${c.name || LEVEL[c.mode].label} · ${LEVEL[c.mode].label}`]), "No matching circuit yet") }))}
+        <p class="hint">${{ fill_water: "Stays ON; turns OFF while the circuit reports a leak or level alarm.", fill_ato: "Runs the top-off pump for that circuit.", fill_awc: "Runs during the fill phase of a water change.", drain_water: "Runs during the drain phase of a water change." }[t]} ${this.btn("goto", cs.length ? "Open Water" : "Set one up in Water", { tab: "water" }, "link")}</p>`;
+    }
+    if (t === "logic") {
+      const gs = this.cfg.logic.filter((g) => this.gateUsed(g));
+      return `${this.field("Logic gate", this.ctl("select", this.d(P("param")), fn.param, { numeric: 1, options: opts(gs.map((g) => [g.n, `${g.name || "Gate " + g.n} · ${this.gateText(g)}`]), "No gates yet") }))}
+        <p class="hint">${this.btn("goto", gs.length ? "Open Logic" : "Create a gate in Logic", { tab: "logic" }, "link")}</p>`;
+    }
+    return "";
+  }
+
+  d_probe(d) {
+    const [lo, hi] = this.points(d), u = d.unit || (d.kind === "ph" ? "" : this._hass.states[d.entity]?.attributes?.unit_of_measurement || "");
+    const dev = Number(d.alarm?.deviation || 0), n = Number(d.nominal || 0);
+    const v = d.entity ? this._hass.states[d.entity]?.state : null;
+    return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Tank temperature" }))}
+      ${this.field("Type", this.ctl("seg", this.d("kind"), d.kind, { options: [["temperature", "Temperature"], ["ph", "pH"], ["other", "Other"]] }))}
+      <div class="lbl">Sensor it reads</div>${this.picker("entity", d.entity, ["sensor", "input_number", "number"], "Choose a sensor from any controller…")}
+      ${this.field("Unit", this.ctl("text", this.d("unit"), d.unit, { ph: u || "°F" }), "Leave empty to use the sensor's unit")}
+      <div class="lbl">Control</div>
+      ${this.field("Setpoint", this.ctl("num", this.d("nominal"), d.nominal, { step: 0.01, u, r: 1 }), "The nominal value outlets hold")}
+      ${this.field("Hysteresis", this.ctl("num", this.d("hysteresis"), d.hysteresis, { step: 0.01, min: 0, u, r: 1 }), "Total swing allowed around the setpoint")}
+      <p class="sentence">Outlets switch at <b>${fmt(lo)}${esc(u)}</b> and <b>${fmt(hi)}${esc(u)}</b>.${v != null && !isNaN(Number(v)) ? ` Now <b>${fmt(v)}${esc(u)}</b>.` : ""}</p>
+      <div class="lbl">Alarm</div>
+      ${this.field("Alarm", this.ctl("bool", this.d("alarm.active"), d.alarm?.active, { r: 1 }))}
+      ${d.alarm?.active ? `${this.field("Allowed deviation", this.ctl("num", this.d("alarm.deviation"), d.alarm?.deviation, { step: 0.01, min: 0, u, r: 1 }))}
+      <p class="sentence">Alarm below <b>${fmt(n - dev)}${esc(u)}</b> or above <b>${fmt(n + dev)}${esc(u)}</b>.</p>
+      ${this.field("No alarm during a water change", this.ctl("bool", this.d("alarm.no_alarm_on_wc"), d.alarm?.no_alarm_on_wc))}
+      ${this.field("Turn control off in alarm", this.ctl("bool", this.d("alarm.deactivate_control"), d.alarm?.deactivate_control), "This probe's heater, cooler or pH outlets go OFF while outside the allowed deviation")}` : ""}
+      <details ${d.status_entity ? "open" : ""}><summary>Data source check</summary>
+        <p class="hint">Readings count as missing unless this status sensor reports OK — for example the GHL bridge connection, or the HYDROS online sensor. Empty uses the default on the Setup tab.</p>
+        ${this.picker("status_entity", d.status_entity, ["sensor", "binary_sensor"], "None — use the default")}
+        ${this.field("OK when state is", this.ctl("text", this.d("status_ok"), d.status_ok, { ph: "Connected" }), "Comma separated")}
+      </details>`;
+  }
+
+  d_timer(d) { return this._schedBody(d, "timer"); }
+  d_light(d) { return this._schedBody(d, "light"); }
+  _schedBody(d, kind) {
+    const ev = kind === "timer" && d.mode === "event";
+    const rows = (d.entries || []).map((e, i) => `<div class="prow">${ev ? `<span>Start at</span>${this.ctl("time", this.d(`entries.${i}.on`), e.on, { r: 1 })}` : `<span>ON</span>${this.ctl("time", this.d(`entries.${i}.on`), e.on, { r: 1 })}<span>OFF</span>${this.ctl("time", this.d(`entries.${i}.off`), e.off, { r: 1 })}`}<span class="grow"></span>${this.btn("entry_del", "", { i }, "ghost sm icon", "mdi:close")}</div>`).join("");
+    const used = kind === "timer" ? [...this.usersOf("timer", d.n).map((c) => this.chName(c)),
+      ...this.cfg.feed_pauses.filter((f) => Number(f.timer) === d.n).map((f) => `starts ${f.name || "Feed pause " + f.n}`),
+      ...this.cfg.level_circuits.filter((c) => Number(c.wc_timer) === d.n).map((c) => `starts water change ${c.name || c.n}`),
+      ...this.cfg.level_circuits.filter((c) => !c.ato_always && Number(c.ato_timer) === d.n).map((c) => `allows ATO ${c.name || c.n}`)]
+      : this.usersOf("illumination", d.n).map((c) => this.chName(c));
+    return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: kind === "timer" ? "e.g. Skimmer" : "e.g. Refugium light" }))}
+      ${kind === "timer" ? `<div class="lbl">Type</div>${this.ctl("seg", this.d("mode"), d.mode, { options: [["normal", "On/Off periods"], ["event", "Start events"]] })}<p class="hint">${ev ? "Starts a feed pause or a water change at set times." : "Outlets set to this schedule are ON during its periods."}</p>` : this.field("Color", this.ctl("color", this.d("color"), d.color, { r: 1 }))}
+      <div class="lbl">${ev ? "Start times" : "Periods"}</div>${rows || `<p class="hint">No times yet.</p>`}
+      <div>${this.btn("entry_add", ev ? "Add start time" : "Add period", {}, "ghost sm", "mdi:plus")}</div>
+      ${this.timeline(d.entries, ev ? "event" : "normal", kind === "light" ? d.color : "#0069b4")}
+      ${kind === "timer" ? `<div class="lbl">Days</div>${this.ctl("seg", this.d("day_mode"), d.day_mode, { options: [["weekdays", "Days of the week"], ["interval", "Every N days"]] })}
+      ${d.day_mode === "interval" ? `${this.field("Every", this.ctl("num", this.d("every_days"), d.every_days, { step: 1, min: 1, u: "days" }))}${this.field("Starting on", this.ctl("date", this.d("start_date"), d.start_date) + this.btn("today", "Today", { path: "start_date" }, "ghost sm"))}`
+        : `<div class="days">${WD.map((w, k) => `<button type="button" class="day ${(d.weekdays || []).includes(k) ? "on" : ""}" aria-pressed="${(d.weekdays || []).includes(k)}" data-act="wd" data-day="${k}">${w}</button>`).join("")}</div>
+        <div class="presets">${this.btn("wdpreset", "Every day", { p: "all" }, "link")}${this.btn("wdpreset", "Weekdays", { p: "wk" }, "link")}${this.btn("wdpreset", "Weekends", { p: "we" }, "link")}</div>`}`
+        : this.field("Turn off when too warm", this.ctl("bool", this.d("temp_reduction"), d.temp_reduction), "Stays OFF for the rest of the day once the tank passes the limit under 'Heat protection for lights'")}
+      <div class="lbl">Used by</div><p class="hint">${used.length ? used.map(esc).join(" · ") : "Nothing yet — on the Outlets tab choose " + (kind === "timer" ? (ev ? "it on a feed pause or water change." : "'Schedule'.") : "'Light'.")}</p>`;
+  }
+
+  d_fp(d) {
+    const ev = this.cfg.timers.filter((t) => t.mode === "event" && this.timerUsed(t));
+    const users = this.usersOf("filter", d.n);
+    return `${this.field("Name", this.ctl("text", this.d("name"), d.name))}
+      ${this.field("Length", this.ctl("num", this.d("minutes"), d.minutes, { step: 1, min: 1, max: this.L.feed_pause_max_min, u: "min" }), `1–${this.L.feed_pause_max_min} minutes`)}
+      ${this.field("Turn off its outlets", this.ctl("bool", this.d("filter_off"), d.filter_off), "Outlets set to this feed pause turn OFF while it runs")}
+      ${this.field("Start automatically", this.ctl("select", this.d("timer"), d.timer, { numeric: 1, options: [[0, "No — start it by hand"], ...ev.map((t) => [t.n, `${t.name || "Timer " + t.n} · ${this.periodsText(t.entries)}`])] }), ev.length ? "" : "To start it on a schedule, create a 'Start events' timer on the Schedules tab")}
+      <div class="lbl">Outlets affected</div><p class="hint">${users.length ? users.map((c) => esc(this.chName(c))).join(" · ") : "None yet. On the Outlets tab, choose 'Feed pause' for the outlets to stop."}</p>`;
+  }
+  d_mt(d) {
+    const used = this.usedChannels();
+    const rows = (d.sockets || []).map((s, i) => `<div class="prow">${this.ctl("select", this.d(`sockets.${i}.ch`), s.ch, { numeric: 1, options: (used.length ? used : this.cfg.channels.slice(0, 1)).map((c) => [c.n, this.chName(c)]) })}
+      ${this.ctl("seg", this.d(`sockets.${i}.state`), s.state, { options: [["off", "OFF"], ["on", "ON"]] })}<span class="grow"></span>${this.btn("sock_del", "", { i }, "ghost sm icon", "mdi:close")}</div>`).join("");
+    return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Water change" }))}
+      ${this.field("Length", this.ctl("num", this.d("minutes"), d.minutes, { step: 1, min: 1, max: this.L.maintenance_max_min, u: "min" }), `Up to ${this.L.maintenance_max_min} minutes`)}
+      <div class="lbl">While it runs</div>${rows || `<p class="hint">No outlets yet.</p>`}<div>${this.btn("sock_add", "Add outlet", {}, "ghost sm", "mdi:plus")}</div>
+      <div class="lbl">Power cut</div>
+      ${this.field("Run during a power cut", this.ctl("bool", this.d("power_cut"), d.power_cut, { r: 1 }), "Becomes the emergency program. Detection is set on the Setup tab")}
+      ${d.power_cut ? this.field("When power returns", this.ctl("seg", this.d("after_power"), d.after_power, { options: [["stop", "End it"], ["run_duration", "Finish its length"]] })) : ""}`;
+  }
+  d_circuit(d) {
+    const sOpts = [[0, "— choose —"], ...this.cfg.level_sensors.filter((s) => s.entity).map((s) => [s.n, `Sensor ${s.n} · ${s.name || this.ename(s.entity)}`])];
+    const two = ["minmax", "ato2", "wc", "ato_wc"].includes(d.mode), ato = ["ato", "minmax", "ato2", "ato_wc"].includes(d.mode), wc = ["wc", "ato_wc"].includes(d.mode);
+    const nT = this.cfg.timers.filter((t) => t.mode === "normal" && this.timerUsed(t)), eT = this.cfg.timers.filter((t) => t.mode === "event" && this.timerUsed(t));
+    const tiles = Object.entries(LEVEL).filter(([k]) => k !== "off").map(([k, m]) => `<button type="button" class="ftile ${d.mode === k ? "on" : ""}" aria-pressed="${d.mode === k}" data-act="lvlmode" data-mode="${k}">${this.icon(m.icon)}<b>${esc(m.label)}</b><small>${esc(m.desc)}</small></button>`).join("");
+    if (sOpts.length === 1) return `<div class="note warn">${this.icon("mdi:information-outline")}<span>Add a level sensor first — a float, optical or leak sensor from any controller.</span>${this.btn("goto", "Add sensor", { tab: "water", kind: "lsensor", n: this.nextFree("level_sensors", (s) => s.entity) || 1 }, "link")}</div>`;
+    return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: d.mode === "leak" ? "e.g. Sump leak" : "e.g. ATO" }))}
+      <div class="lbl">Mode</div><div class="ftiles">${tiles}</div>
+      <div class="detail">
+      ${this.field(two ? (d.mode === "ato2" ? "Sensor 1" : "Lower sensor (min)") : "Sensor", this.ctl("select", this.d("sensor1"), d.sensor1, { numeric: 1, options: sOpts }))}
+      ${two ? this.field(d.mode === "ato2" ? "Sensor 2" : "Upper sensor (max)", this.ctl("select", this.d("sensor2"), d.sensor2, { numeric: 1, options: sOpts })) : ""}
+      ${d.mode !== "leak" ? this.field("Maximum on-time", this.ctl("num", this.d("max_on_s"), d.max_on_s, { step: 1, min: 0, u: "s" }), "Failsafe: alarm and pump OFF if it runs longer. 0 turns this off") : ""}
+      ${this.field("Clear the alarm by itself", this.ctl("bool", this.d("auto_reset"), d.auto_reset), "Off: outlets stay off until you press Reset")}
+      ${ato ? this.field("ATO always allowed", this.ctl("bool", this.d("ato_always"), d.ato_always, { r: 1 })) : ""}
+      ${ato && !d.ato_always ? this.field("Only during", this.ctl("select", this.d("ato_timer"), d.ato_timer, { numeric: 1, options: [[0, "— choose a schedule —"], ...nT.map((t) => [t.n, `${t.name || "Timer " + t.n} · ${this.periodsText(t.entries)}`])] })) : ""}
+      ${wc ? this.field("Start water change", this.ctl("select", this.d("wc_timer"), d.wc_timer, { numeric: 1, options: [[0, "By hand only"], ...eT.map((t) => [t.n, `${t.name || "Timer " + t.n} · ${this.periodsText(t.entries)}`])] })) : ""}
+      </div>
+      <div class="lbl">Outlets</div><p class="hint">${this._circuitUsers(d.n, d.mode)}</p>`;
+  }
+  _circuitUsers(n, mode) {
+    const need = mode === "leak" ? ["fill_water"] : ["wc", "ato_wc"].includes(mode) ? ["drain_water", "fill_awc", ...(mode === "ato_wc" ? ["fill_ato"] : [])] : ["fill_ato"];
+    return need.map((t) => { const us = this.usersOf(t, n); return `<b>${esc(funcOf({ type: t }).label)}</b>: ${us.length ? us.map((c) => esc(this.chName(c))).join(", ") : "none yet — choose it on the Outlets tab"}`; }).join("<br>");
+  }
+  d_lsensor(d) {
+    return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Sump low float" }))}
+      <div class="lbl">Source</div>${this.picker("entity", d.entity, ["binary_sensor", "sensor", "switch", "input_boolean"], "Choose a float, optical or leak sensor…")}
+      ${this.field("Water present when state is", this.ctl("text", this.d("wet_states"), d.wet_states, { ph: "on" }), "Comma separated")}
+      ${this.field("…or dry when state is", this.ctl("text", this.d("dry_states"), d.dry_states, { ph: "e.g. Normal" }), "For sensors that report a dry state, like the Mini leak sensor ('Normal'). Overrides the line above")}
+      ${this.field("Invert", this.ctl("bool", this.d("invert"), d.invert), "For a low-level float that should trip when it leaves the water")}
+      ${this.field("Reaction time", this.ctl("num", this.d("reaction_s"), d.reaction_s, { step: 1, min: 0, u: "s" }), "Must hold a state this long before it counts")}`;
+  }
+  gateText(g) {
+    const i = (x) => `${x?.invert ? "NOT " : ""}${this.fnText(x)}`;
+    if (g.op === "delayed_on" || g.op === "delayed_off") return `${OPS[g.op].label} ${g.seconds}s · ${i(g.in1)}`;
+    return `${i(g.in1)} ${OPS[g.op].label} ${i(g.in2)}`;
+  }
+  _gateInput(x, base) {
+    const sel = funcOf(x);
+    return `<div class="detail"><div class="gin">${this.ctl("select", `data-d="${base}.key"`, sel.key, { r: 1, options: FUNCS.map((f) => [f.key, f.label]) })}
+      ${this.ctl("seg", this.d(`${base}.invert`), x.invert ? 1 : 0, { numeric: 1, options: [[0, "As is"], [1, "NOT"]] })}</div>${this._fnDetail(x, base)}</div>`;
+  }
+  d_gate(d) {
+    ["in1", "in2"].forEach((k) => {
+      if (d[k]?.key) { const f = FUNCS.find((y) => y.key === d[k].key); const same = d[k].type === f.type && (d[k].mode || "") === (f.mode || ""); d[k] = { type: f.type, mode: f.mode || "", param: same ? d[k].param : this._defaultParam(f.type), invert: !!d[k].invert }; }
+      if (d[k]) d[k].invert = !!Number(d[k].invert);
+    });
+    const del = d.op === "delayed_on" || d.op === "delayed_off";
+    const users = this.usersOf("logic", d.n).map((c) => this.chName(c));
+    return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Skimmer after maintenance" }))}
+      <div class="lbl">Operator</div>${this.ctl("seg", this.d("op"), d.op, { options: Object.entries(OPS).map(([k, o]) => [k, o.label]) })}<p class="hint">${esc(OPS[d.op].desc)}</p>
+      <div class="lbl">${del ? "Input" : "Input 1"}</div>${this._gateInput(d.in1 || {}, "in1")}
+      ${del ? this.field("Duration", this.ctl("num", this.d("seconds"), d.seconds, { step: 1, min: 0, u: "s" })) : `<div class="lbl">Input 2</div>${this._gateInput(d.in2 || {}, "in2")}`}
+      <div class="preview" data-preview></div>
+      <div class="lbl">Used by</div><p class="hint">${users.length ? users.map(esc).join(" · ") : "No outlet yet — on the Outlets tab choose 'Logic gate'."}</p>`;
+  }
+  d_reminder(d) {
+    return `${this.field("Reminder", this.ctl("text", this.d("text"), d.text, { ph: "e.g. Replace carbon" }))}
+      ${this.field("Every", this.ctl("num", this.d("days"), d.days, { step: 1, min: 0, u: "days" }))}
+      ${this.field("Counting from", this.ctl("date", this.d("start"), d.start) + this.btn("today", "Today", { path: "start" }, "ghost sm"))}
+      ${this.field("Repeat", this.ctl("bool", this.d("repeat"), d.repeat), "Off: shows once, then turns itself off")}
+      ${this.field("On", this.ctl("bool", this.d("enabled"), d.enabled))}`;
+  }
+
+  // ------------------------------------------------------------------ page forms
+  form(name, sections) {
+    if (!this.forms[name]) { const draft = {}; sections.forEach((s) => (draft[s] = clone(this.cfg[s]))); this.forms[name] = { draft, sections, dirty: false }; }
+    return this.forms[name].draft;
+  }
+  _formBar(name) { const el = this.shadowRoot.querySelector(`[data-formbar="${name}"]`); if (el) el.outerHTML = this.formBar(name); }
+  formBar(name) { const F = this.forms[name]; return `<div class="formbar ${F?.dirty ? "on" : ""}" data-formbar="${name}">${F?.dirty ? `<span>Unsaved changes</span>${this.btn("form_revert", "Revert", { form: name }, "ghost sm")}${this.btn("form_save", "Save", { form: name }, "primary sm")}` : ""}</div>`; }
+  async _saveForm(name) {
+    const F = this.forms[name];
+    try {
+      for (const s of F.sections) { const r = await this._hass.callWS({ type: "sentinel_controller/save", section: s, value: F.draft[s] }); this.cfg = r.config; this.status = r.status; }
+      delete this.forms[name]; this._toast("Saved"); this._render();
+    } catch (e) { this._toast(`Not saved: ${e.message || e}`, true); }
+  }
+
+  // ------------------------------------------------------------------ live updates
+  _live() {
+    const sr = this.shadowRoot; if (!sr || !this.cfg) return;
+    sr.querySelectorAll(".page [data-live], .hdr [data-live]").forEach((el) => { const h = this._liveHTML(el.dataset.live); if (h != null && el.innerHTML !== h) el.innerHTML = h; });
+  }
+  _liveHTML(key) {
+    const i = key.indexOf(":"); const k = i < 0 ? key : key.slice(0, i), a = i < 0 ? "" : key.slice(i + 1);
+    switch (k) {
+      case "clock": return esc(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+      case "bell": { const n = this.st(["alarms"], []).length; return `${this.icon(n ? "mdi:bell-ring" : "mdi:bell-outline")}${n ? `<b>${n}</b>` : ""}`; }
+      case "alarms": return this._alarmBanner();
+      case "ch": return this._chState(this.item("channels", a));
+      case "probe": { const p = this.probe(a); return p ? this._probeLive(p) : ""; }
+      case "fp": return this._fpLive(this.item("feed_pauses", a));
+      case "mt": return this._mtLive(this.item("maintenance", a));
+      case "lvl": return this._lvlLive(this.item("level_circuits", a));
+      case "sens": { const s = this.item("level_sensors", a); const v = this.st(["level_sensors", a]); return s?.entity ? (v == null ? `<span class="chip warn">No data</span>` : v ? `<span class="chip info">${this.icon("mdi:water")}Water</span>` : `<span class="chip">${this.icon("mdi:water-off-outline")}Dry</span>`) : ""; }
+      case "gate": return this.pill(this.st(["logic", a]));
+      case "tl": { const [sec, n] = a.split("-"); const x = this.item(sec, n); return x ? this.timeline(x.entries, x.mode === "event" ? "event" : "normal", sec === "illumination" ? x.color : "#0069b4") : ""; }
+      case "tmr": { const t = this.item("timers", a); return t?.mode === "normal" ? this.pill(this.st(["timers", a])) : `<span class="chip">Events</span>`; }
+      case "lgt": return this.pill(this.st(["illumination", a]));
+      case "override": return this.cfg.manual_override ? `<div class="banner warn">${this.icon("mdi:hand-back-right")}<span><b>Manual override is on.</b> Outlets hold the state you set by hand instead of following their programs.</span>${this.btn("override", "Turn off", {}, "ghost sm")}</div>` : "";
+      case "power": return this.st(["power_cut"]) ? `<div class="banner bad">${this.icon("mdi:flash-off")}<span><b>Power cut.</b> The emergency program is running.</span></div>` : "";
+      case "pcstate": return this.pill(this.st(["power_cut"]), "POWER CUT", "OK");
+    }
+    return null;
+  }
+  _chState(c) {
+    if (!c) return "";
+    const s = this.st(["channels", c.n], {});
+    const mism = c.entity && s.actual != null && s.actual !== s.out;
+    const unav = c.entity && s.actual == null && !s.conflict;
+    const why = this.whyText(c);
+    let sub = "";
+    if (s.conflict) sub = `<small class="badc">${this.icon("mdi:alert")}conflict</small>`;
+    else if (mism) sub = `<small class="warnc">${this.icon("mdi:sync-alert")}device ${s.actual ? "on" : "off"}</small>`;
+    else if (unav) sub = `<small class="badc">${this.icon("mdi:lan-disconnect")}offline</small>`;
+    else if (why) sub = `<small>${esc(why)}</small>`;
+    return `${this.pill(s.out)}${sub}`;
+  }
+  _probeLive(p) {
+    const v = this.st(["probes", p.id, "value"]), u = this.unit(p);
+    return `<div class="pv"><span class="big">${v == null ? "—" : fmt(v, p.kind === "ph" ? 2 : 1)}</span><span class="u">${esc(u)}</span>${this.stateChip(p)}</div>${this.bandBar(p)}`;
+  }
+  _fpLive(f) {
+    if (!f) return "";
+    const end = this.st(["feed_pauses", f.n]); const rem = this.remaining(end); const on = !!end && rem > 0;
+    const pct = on ? 100 - (rem / (f.minutes * 60)) * 100 : 0;
+    return `<div class="mode-st">${on ? `<span class="cd">${this.mmss(rem)}</span><span class="muted">left</span>` : `<span class="muted">${f.minutes} min</span>`}</div>
+      <div class="prog"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>
+      ${this.btn("fp", on ? "Stop" : "Start", { n: f.n, on: on ? 1 : 0 }, on ? "warn" : "primary", on ? "mdi:stop" : "mdi:play")}`;
+  }
+  _mtLive(m) {
+    if (!m) return "";
+    const s = this.st(["maintenance", m.n]); const on = !!s; const rem = s?.end ? this.remaining(s.end) : 0;
+    const pct = on && !s.power ? 100 - (rem / (m.minutes * 60)) * 100 : on ? 100 : 0;
+    return `<div class="mode-st">${on ? (s.power ? `<span class="chip bad">Power-cut program</span>` : `<span class="cd">${this.mmss(rem)}</span><span class="muted">left</span>`) : `<span class="muted">${m.minutes} min</span>`}</div>
+      <div class="prog"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>
+      ${this.btn("mt", on ? "Stop" : "Start", { n: m.n, on: on ? 1 : 0 }, on ? "warn" : "primary", on ? "mdi:stop" : "mdi:play")}`;
+  }
+  _lvlLive(c) {
+    if (!c) return "";
+    const s = this.st(["level", c.n], {}); const wc = ["wc", "ato_wc"].includes(c.mode);
+    const out = [];
+    if (s.error) out.push(`<span class="chip bad">${this.icon("mdi:alert")}${esc(s.error)}</span>`);
+    else if (c.mode === "leak") out.push(s.fill_water === false ? `<span class="chip bad">Leak</span>` : s.fill_water == null ? `<span class="chip warn">No data</span>` : `<span class="chip ok">Dry</span>`);
+    if (["ato", "minmax", "ato2", "ato_wc"].includes(c.mode) && !s.error) out.push(`<span class="chip ${s.fill_ato ? "info" : ""}">ATO ${s.fill_ato ? "filling" : s.fill_ato == null ? "no data" : "idle"}</span>`);
+    if (wc && s.phase) out.push(`<span class="chip info">Water change: ${esc(s.phase === "drain" ? "draining" : "filling")}</span>`);
+    const btns = (s.error ? this.btn("reset", "Reset", { n: c.n }, "warn sm", "mdi:restore") : "") + (wc && !s.error ? this.btn("wc", s.phase ? "Stop water change" : "Start water change", { n: c.n, on: s.phase ? 1 : 0 }, s.phase ? "warn sm" : "ghost sm", "mdi:water-sync") : "");
+    return `<div class="chips">${out.join("")}</div>${btns ? `<div class="row-btns">${btns}</div>` : ""}`;
+  }
+  _alarmBanner() {
+    const al = this.st(["alarms"], []);
+    if (!al.length) return `<div class="banner ok">${this.icon("mdi:check-circle-outline")}<span>All clear — no alarms.</span></div>`;
+    return `<div class="banner bad list">${al.map((a) => {
+      let act = "";
+      if (a.reminder) act = this.btn("ack", "Done", { n: a.reminder }, "ghost sm");
+      else if (/^level_\d+$/.test(a.key)) act = this.btn("reset", "Reset", { n: a.key.split("_")[1] }, "ghost sm");
+      else if (/^probe_/.test(a.key)) act = this.btn("goto", "Open probe", { tab: "probes", kind: "probe", n: a.key.replace(/^probe_/, "").replace(/_fault$/, "") }, "link");
+      else if (/^channel_\d+/.test(a.key)) act = this.btn("goto", "Open outlet", { tab: "outlets", kind: "channel", n: a.key.split("_")[1] }, "link");
+      return `<div class="al">${this.icon(a.reminder ? "mdi:calendar-alert" : "mdi:alert")}<span>${esc(a.text)}</span>${act}</div>`;
     }).join("")}</div>`;
   }
 
-  p_notify() {
-    const n = this.cfg.notify || {};
-    const svcs = Object.keys(this._hass.services.notify || {}).map((s) => `notify.${s}`).sort();
-    const cur = new Set(n.targets || []);
-    return `<h2>Notifications</h2><div class="form">
-      ${this.row("Send to", `<select multiple size="6" data-bind="notify.targets" data-kind="multi">${svcs.map((s) => `<option value="${esc(s)}" ${cur.has(s) ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>`, "Ctrl/Cmd-click to pick several")}
-      ${this.row("When a new alarm occurs", this.chk("notify.on_new_alarm", n.on_new_alarm))}
-      ${this.row("When alarms clear", this.chk("notify.on_clear", n.on_clear))}
-      ${this.row("Repeat while an alarm is active (min)", this.num("notify.repeat_min", n.repeat_min, "1", 0), "0 = don't repeat")}
-      ${this.row("Daily status at", this.txt("notify.daily_at", n.daily_at, "", "time"), "Leave empty for none")}</div>
-      <p class="hint">The integration also creates binary_sensor entities (Alarm, Feed pause 1–4, Maintenance 1–4, Water change, Power cut) you can use in your own automations, such as your Alexa announcement.</p>`;
+  // ------------------------------------------------------------------ render
+  _toast(text, bad = false) {
+    const t = document.createElement("div"); t.className = `toast ${bad ? "bad" : ""}`; t.setAttribute("role", "status"); t.textContent = text;
+    this.shadowRoot.appendChild(t); setTimeout(() => t.classList.add("in"), 10); setTimeout(() => { t.classList.remove("in"); setTimeout(() => t.remove(), 300); }, bad ? 5000 : 2200);
+  }
+  _render() {
+    const sr = this.shadowRoot;
+    if (this.err) { sr.innerHTML = `${STYLE}<div class="root"><div class="card pad">${esc(this.err)}</div></div>`; return; }
+    if (!this.cfg) { sr.innerHTML = `${STYLE}<div class="root"><div class="card pad">Loading…</div></div>`; return; }
+    const tabs = TABS.map(([k, l, i]) => `<button type="button" class="tab ${this.tab === k ? "on" : ""}" aria-current="${this.tab === k ? "page" : "false"}" data-tab="${k}">${this.icon(i)}<span>${l}</span></button>`).join("");
+    const page = this["p_" + this.tab].call(this);
+    const drawer = sr.querySelector(".drawer-wrap");
+    sr.innerHTML = `${STYLE}<div class="root">
+      <div class="hdr"><div class="ttl"><b>Sentinel Controller</b><span data-live="clock"></span></div>
+        <button type="button" class="bell" data-tab="alerts" aria-label="Alerts" data-live="bell"></button></div>
+      <nav class="tabs" aria-label="Sections">${tabs}</nav>
+      <div class="page">${page}</div></div>`;
+    if (drawer) sr.appendChild(drawer);
+    this._live();
   }
 
-  p_system() {
-    const pc = this.cfg.power_cut || {};
-    return `<h2>System</h2>
-      <h3>Power cut monitoring</h3><div class="form">
-      ${this.row("Enable", this.chk("power_cut.enabled", pc.enabled))}
-      ${this.row("Source", this.entSel("power_cut.entity", ["sensor", "binary_sensor", "input_boolean"], pc.entity), "e.g. the inverter or EcoFlow AC input voltage")}
-      ${this.row("Power is cut when", this.sel_("power_cut.mode", [["below", "Value is below"], ["state", "State equals"]], pc.mode, 'data-rerender="1"'))}
-      ${pc.mode === "state" ? this.row("State", this.txt("power_cut.state", pc.state, "on")) : this.row("Threshold", this.num("power_cut.threshold", pc.threshold, "any"))}
-      ${this.row("Now", this.pill(this.st(["power_cut"]), "POWER CUT", "OK"))}</div>
-      <h3>Data source</h3><div class="form">
-      ${this.row("Source status sensor", this.entSel("data_source.entity", ["sensor", "binary_sensor"], (this.cfg.data_source || {}).entity), "e.g. your GHL bridge connection sensor. Probe data counts as missing unless this reads OK")}
-      ${this.row("OK when state is", this.txt("data_source.ok_states", (this.cfg.data_source || {}).ok_states, "Connected"), "Comma separated")}
-      ${this.row("Also treat readings older than (min) as missing", this.num("data_timeout_min", this.cfg.data_timeout_min, "1", 0), "0 = off. Leave off if your sensors only report when the value changes")}</div>
-      <p class="hint">Settings are stored in Home Assistant and included in Home Assistant backups. Probe calibration, firmware and Wi-Fi settings stay on the GHL controller.</p>`;
+  // ------------------------------------------------------------------ pages
+  p_overview() {
+    const probes = this.cfg.probes.map((p) => `<button type="button" class="card probe" data-act="open" data-kind="probe" data-n="${esc(p.id)}"><span class="cap">${esc(this.edev(p.entity) || p.kind)}</span><b class="pn">${esc(p.name || p.id)}</b><div data-live="probe:${esc(p.id)}"></div></button>`).join("");
+    const outs = this.usedChannels().filter((c) => c.entity);
+    const fps = this.cfg.feed_pauses.filter((f) => f.n === 1 || this.usersOf("filter", f.n).length || f.name !== `Feed pause ${f.n}`);
+    const mts = this.cfg.maintenance.filter((m) => (m.sockets || []).length || m.name !== `Maintenance ${m.n}`);
+    const modes = [...fps.map((f) => `<div class="card mode"><div class="mh">${this.icon("mdi:fish")}<b>${esc(f.name || "Feed pause " + f.n)}</b></div><div data-live="fp:${f.n}"></div></div>`),
+      ...mts.map((m) => `<div class="card mode"><div class="mh">${this.icon("mdi:wrench-outline")}<b>${esc(m.name || "Maintenance " + m.n)}</b></div><div data-live="mt:${m.n}"></div></div>`)].join("");
+    const water = this.cfg.level_circuits.filter((c) => c.mode !== "off").map((c) => `<div class="card lvl"><button type="button" class="lh" data-act="open" data-kind="circuit" data-n="${c.n}">${this.icon(LEVEL[c.mode].icon, "ic")}<div><b>${esc(c.name || LEVEL[c.mode].label)}</b><small>${esc(LEVEL[c.mode].label)}</small></div></button><div data-live="lvl:${c.n}"></div></div>`).join("");
+    const nextCh = this.nextFree("channels", (c) => c.entity || c.name);
+    return `<div data-live="power"></div><div data-live="override"></div><div data-live="alarms"></div>
+      ${this.sec("Probes", this.btn("goto", "Manage", { tab: "probes" }, "link"))}
+      <div class="grid g4">${probes || this.empty("mdi:thermometer-plus", "No probes yet", "Add temperature and pH from any controller — GHL, HYDROS, Apex.", this.btn("goto", "Add a probe", { tab: "probes", kind: "probe", n: "new" }, "primary"))}</div>
+      ${this.sec("Feed & maintenance", this.btn("goto", "Manage", { tab: "modes" }, "link"))}
+      <div class="grid g4">${modes}</div>
+      ${this.sec("Outlets", this.btn("goto", "Manage", { tab: "outlets" }, "link"))}
+      <div class="grid g3">${outs.map((c) => this._outletCard(c)).join("") || this.empty("mdi:power-socket-us", "No outlets yet", "Pick any switch or smart plug and choose what it does.", nextCh ? this.btn("goto", "Add an outlet", { tab: "outlets", kind: "channel", n: nextCh }, "primary") : "")}</div>
+      ${water ? `${this.sec("Water", this.btn("goto", "Manage", { tab: "water" }, "link"))}<div class="grid g3">${water}</div>` : ""}`;
+  }
+  _outletCard(c) {
+    const f = funcOf(c.fn);
+    const manual = this.cfg.manual_override ? `<div class="manual"><span class="muted">By hand</span>${this.ctl("seg", `data-man="${c.n}"`, c.manual === "on" ? "on" : "off", { options: [["off", "OFF"], ["on", "ON"]] }).replace(/data-act="seg"/g, `data-act="manual" data-n="${c.n}"`)}</div>` : "";
+    return `<div class="card outlet"><button type="button" class="oc" data-act="open" data-kind="channel" data-n="${c.n}">
+      <span class="oi">${this.icon(f.icon)}</span>
+      <span class="ot"><span class="cap">Outlet ${c.n}${c.entity ? " · " + esc(this.edev(c.entity) || this.ename(c.entity)) : ""}</span><b>${esc(c.name || this.ename(c.entity) || "Outlet " + c.n)}</b><small>${esc(this.fnText(c.fn))}</small></span>
+      <span class="os" data-live="ch:${c.n}"></span></button>${manual}</div>`;
+  }
+  p_outlets() {
+    const used = this.usedChannels(); const next = this.nextFree("channels", (c) => c.entity || c.name);
+    return `<div data-live="override"></div>
+      <div class="toolbar">${next ? this.btn("open", "Add outlet", { kind: "channel", n: next }, "primary", "mdi:plus") : ""}
+        <span class="grow"></span><span class="muted">${used.length} of ${this.L.channels} in use</span>
+        ${this.btn("override", this.cfg.manual_override ? "Manual override: ON" : "Manual override", {}, this.cfg.manual_override ? "warn" : "ghost", "mdi:hand-back-right-outline")}</div>
+      <div class="grid g3">${used.map((c) => this._outletCard(c)).join("") || this.empty("mdi:power-socket-us", "No outlets yet", "An outlet is any switch, smart plug or relay in Home Assistant — a KP303 socket, a HYDROS output, a Shelly. Add one and choose what it does.", next ? this.btn("open", "Add outlet", { kind: "channel", n: next }, "primary", "mdi:plus") : "")}</div>`;
+  }
+  p_probes() {
+    const cards = this.cfg.probes.map((p) => {
+      const [lo, hi] = this.points(p), u = this.unit(p);
+      const n = this.cfg.channels.filter((c) => ["temperature", "ph"].includes(c.fn?.type) && c.fn.param === p.id).length;
+      return `<button type="button" class="card probe" data-act="open" data-kind="probe" data-n="${esc(p.id)}"><span class="cap">${esc([this.edev(p.entity), p.entity].filter(Boolean).join(" · ") || "no sensor")}</span><b class="pn">${esc(p.name || p.id)}</b>
+        <div data-live="probe:${esc(p.id)}"></div>
+        <div class="kv"><span>Setpoint <b>${fmt(p.nominal)}${esc(u)}</b></span><span>Switches <b>${fmt(lo)}–${fmt(hi)}</b></span><span>Alarm <b>${p.alarm?.active ? `±${fmt(p.alarm.deviation)}` : "off"}</b></span><span>Outlets <b>${n}</b></span></div></button>`;
+    }).join("");
+    return `<div class="toolbar">${this.cfg.probes.length < this.L.probes ? this.btn("open", "Add probe", { kind: "probe", n: "new" }, "primary", "mdi:plus") : ""}<span class="grow"></span><span class="muted">Any temperature or pH sensor in Home Assistant, from any controller</span></div>
+      <div class="grid g3">${cards || this.empty("mdi:thermometer-plus", "No probes yet", "A probe gives heaters, coolers and pH outlets their setpoint, and raises alarms.", this.btn("open", "Add probe", { kind: "probe", n: "new" }, "primary", "mdi:plus"))}</div>
+      <p class="hint">Band: blue = where outlets switch, red = alarm zone, marker = now.</p>`;
+  }
+  p_schedules() {
+    const ts = this.cfg.timers.filter((t) => this.timerUsed(t)), ls = this.cfg.illumination.filter((t) => this.timerUsed(t));
+    const nt = this.nextFree("timers", (t) => this.timerUsed(t)), nl = this.nextFree("illumination", (t) => this.timerUsed(t));
+    const days = (x) => (x.day_mode === "interval" ? `every ${x.every_days} days` : (x.weekdays || []).length === 7 ? "every day" : (x.weekdays || []).map((d) => WD[d]).join(" "));
+    const card = (x, kind, sec) => `<button type="button" class="card sched" data-act="open" data-kind="${kind}" data-n="${x.n}">
+      <div class="sh">${kind === "light" ? `<i class="dot" style="background:${esc(x.color)}"></i>` : this.icon(x.mode === "event" ? "mdi:play-circle-outline" : "mdi:timer-outline", "ic")}<div><b>${esc(x.name || (kind === "light" ? "Light " : "Timer ") + x.n)}</b><small>${esc(kind === "light" ? this.periodsText(x.entries) + (x.temp_reduction ? " · heat protection" : "") : (x.mode === "event" ? "Start events · " : "") + this.periodsText(x.entries) + " · " + days(x))}</small></div>
+      <span data-live="${kind === "light" ? "lgt" : "tmr"}:${x.n}"></span></div><div data-live="tl:${sec}-${x.n}"></div></button>`;
+    const F = this.form("lightred", ["light_reduction"]); const lr = F.light_reduction; const tp = this.cfg.probes.filter((p) => p.kind === "temperature");
+    return `${this.sec("Timers", nt ? this.btn("open", "New timer", { kind: "timer", n: nt }, "link", "mdi:plus") : "")}
+      <div class="grid g2">${ts.map((t) => card(t, "timer", "timers")).join("") || this.empty("mdi:timer-plus-outline", "No timers", "Run a skimmer or reactor on a schedule, or start a feed pause or water change at set times.", nt ? this.btn("open", "New timer", { kind: "timer", n: nt }, "primary", "mdi:plus") : "")}</div>
+      ${this.sec("Lights (on/off)", nl ? this.btn("open", "New light schedule", { kind: "light", n: nl }, "link", "mdi:plus") : "")}
+      <div class="grid g2">${ls.map((t) => card(t, "light", "illumination")).join("") || this.empty("mdi:lightbulb-on-outline", "No light schedules", "For non-dimmable lights: refugium, T5, frag light.", nl ? this.btn("open", "New light schedule", { kind: "light", n: nl }, "primary", "mdi:plus") : "")}</div>
+      ${this.sec("Heat protection for lights")}
+      <div class="card pad form">${this.formBar("lightred")}
+        ${this.field("Temperature probe", this.ctl("select", this.f("lightred", "light_reduction.probe"), lr.probe, { options: [["", "Off"], ...tp.map((p) => [p.id, p.name || p.id])] }))}
+        ${this.field("Turn lights off at setpoint +", this.ctl("num", this.f("lightred", "light_reduction.limit"), lr.limit, { step: 0.1, min: 0, u: this.unit(this.probe(lr.probe)) }), "Light schedules with 'Turn off when too warm' stay OFF for the rest of the day")}
+        ${this.st(["light_reduction_today"]) ? `<div class="note warn">${this.icon("mdi:thermometer-alert")}<span>Triggered today — those lights stay off until midnight.</span></div>` : ""}</div>`;
+  }
+  p_modes() {
+    const fps = this.cfg.feed_pauses.map((f) => `<div class="card mode"><div class="mh">${this.icon("mdi:fish")}<b>${esc(f.name || "Feed pause " + f.n)}</b>${this.btn("open", "", { kind: "fp", n: f.n }, "ghost sm icon", "mdi:pencil")}</div>
+      <small class="muted">${this.usersOf("filter", f.n).length} outlet(s)${Number(f.timer) ? " · starts on a schedule" : ""}</small><div data-live="fp:${f.n}"></div></div>`).join("");
+    const mts = this.cfg.maintenance.map((m) => `<div class="card mode"><div class="mh">${this.icon(m.power_cut ? "mdi:flash-alert-outline" : "mdi:wrench-outline")}<b>${esc(m.name || "Maintenance " + m.n)}</b>${this.btn("open", "", { kind: "mt", n: m.n }, "ghost sm icon", "mdi:pencil")}</div>
+      <small class="muted">${esc((m.sockets || []).map((s) => `${s.state === "on" ? "ON" : "OFF"} ${this.item("channels", s.ch)?.name || "outlet " + s.ch}`).join(" · ") || "No outlets yet")}${m.power_cut ? " · power-cut program" : ""}</small><div data-live="mt:${m.n}"></div></div>`).join("");
+    return `${this.sec("Feed pause")}<div class="grid g4">${fps}</div>${this.sec("Maintenance")}<div class="grid g4">${mts}</div>
+      <p class="hint">Want the skimmer to wait after maintenance or a feed pause? Use a Delayed OFF or Delayed ON gate on the Logic tab.</p>`;
+  }
+  p_water() {
+    const cs = this.cfg.level_circuits.filter((c) => c.mode !== "off"), nc = this.nextFree("level_circuits", (c) => c.mode !== "off");
+    const ss = this.cfg.level_sensors.filter((s) => s.entity), ns = this.nextFree("level_sensors", (s) => s.entity);
+    return `${this.sec("Circuits", nc && ss.length ? this.btn("open", "New circuit", { kind: "circuit", n: nc }, "link", "mdi:plus") : "")}
+      <div class="grid g2">${cs.map((c) => `<div class="card lvl"><button type="button" class="lh" data-act="open" data-kind="circuit" data-n="${c.n}">${this.icon(LEVEL[c.mode].icon, "ic")}<div><b>${esc(c.name || LEVEL[c.mode].label)}</b><small>${esc(LEVEL[c.mode].label)} · ${esc([c.sensor1, c.sensor2].filter(Number).map((n) => this.item("level_sensors", n)?.name || "sensor " + n).join(" / "))}</small></div>${this.icon("mdi:chevron-right", "muted")}</button><div data-live="lvl:${c.n}"></div></div>`).join("") || this.empty("mdi:waves-arrow-up", "No circuits", ss.length ? "ATO, water changes and leak shutoff." : "ATO, water changes and leak shutoff. Add your sensors below first.", ss.length && nc ? this.btn("open", "New circuit", { kind: "circuit", n: nc }, "primary", "mdi:plus") : "")}</div>
+      ${this.sec("Sensors", ns ? this.btn("open", "Add sensor", { kind: "lsensor", n: ns }, "link", "mdi:plus") : "")}
+      <div class="grid g3">${ss.map((s) => `<button type="button" class="card sens" data-act="open" data-kind="lsensor" data-n="${s.n}"><div><span class="cap">Sensor ${s.n}${this.edev(s.entity) ? " · " + esc(this.edev(s.entity)) : ""}</span><b>${esc(s.name || this.ename(s.entity))}</b></div><span data-live="sens:${s.n}"></span></button>`).join("") || this.empty("mdi:water-outline", "No sensors", "Floats, optical sensors and leak sensors from any controller.", ns ? this.btn("open", "Add sensor", { kind: "lsensor", n: ns }, "primary", "mdi:plus") : "")}</div>`;
+  }
+  p_logic() {
+    const gs = this.cfg.logic.filter((g) => this.gateUsed(g)), ng = this.nextFree("logic", (g) => this.gateUsed(g));
+    return `<div class="toolbar">${ng ? this.btn("open", "New gate", { kind: "gate", n: ng }, "primary", "mdi:plus") : ""}<span class="grow"></span><span class="muted">Combine functions for one outlet</span></div>
+      <div class="grid g2">${gs.map((g) => `<button type="button" class="card gate" data-act="open" data-kind="gate" data-n="${g.n}"><div class="gh"><span class="op">${esc(OPS[g.op].label)}</span><b>${esc(g.name || "Gate " + g.n)}</b><span data-live="gate:${g.n}"></span></div><small>${esc(this.gateText(g))}</small><small class="muted">${esc(this.usersOf("logic", g.n).map((c) => this.chName(c)).join(", ") || "Not used by an outlet yet")}</small></button>`).join("")
+        || this.empty("mdi:gate-and", "No logic gates", "Examples from the GHL guide: skimmer OFF during a feed pause AND when the sump is too high; skimmer stays off 10 minutes after maintenance (Delayed OFF).", ng ? this.btn("open", "New gate", { kind: "gate", n: ng }, "primary", "mdi:plus") : "")}</div>`;
+  }
+  p_alerts() {
+    const rs = this.cfg.reminders.filter((r) => r.text), nr = this.nextFree("reminders", (r) => r.text);
+    const F = this.form("notify", ["notify"]); const n = F.notify;
+    const svcs = Object.keys(this._hass.services.notify || {}).map((s) => `notify.${s}`).sort();
+    const tg = new Set(n.targets || []);
+    const due = (r) => { if (!r.start) return ""; const d = Math.ceil((new Date(r.start).getTime() + r.days * 864e5 - Date.now()) / 864e5); return d <= 0 ? `<span class="chip bad">Due</span>` : `<span class="chip">in ${d} d</span>`; };
+    return `<div data-live="alarms"></div>
+      ${this.sec("Reminders", nr ? this.btn("open", "New reminder", { kind: "reminder", n: nr }, "link", "mdi:plus") : "")}
+      <div class="grid g3">${rs.map((r) => `<button type="button" class="card rem" data-act="open" data-kind="reminder" data-n="${r.n}">${this.icon("mdi:calendar-alert", "ic")}<div><b>${esc(r.text)}</b><small>Every ${r.days} days${r.repeat ? "" : " · once"}${r.enabled ? "" : " · off"}</small></div>${r.enabled ? due(r) : ""}</button>`).join("") || this.empty("mdi:calendar-plus", "No reminders", "Carbon, GFO, probe calibration, filter socks…", nr ? this.btn("open", "New reminder", { kind: "reminder", n: nr }, "primary", "mdi:plus") : "")}</div>
+      ${this.sec("Notifications")}
+      <div class="card pad form">${this.formBar("notify")}
+        <div class="lbl">Send to</div><div class="checks">${svcs.map((s) => `<label class="chk"><input type="checkbox" data-notify="${esc(s)}" ${tg.has(s) ? "checked" : ""}><span>${esc(s.replace("notify.", ""))}</span></label>`).join("") || `<p class="hint">No notify services in Home Assistant.</p>`}</div>
+        ${this.field("New alarm", this.ctl("bool", this.f("notify", "notify.on_new_alarm"), n.on_new_alarm))}
+        ${this.field("Alarm cleared", this.ctl("bool", this.f("notify", "notify.on_clear"), n.on_clear))}
+        ${this.field("Repeat while active", this.ctl("num", this.f("notify", "notify.repeat_min"), n.repeat_min, { step: 1, min: 0, u: "min" }), "0 = don't repeat")}
+        ${this.field("Daily status at", this.ctl("time", this.f("notify", "notify.daily_at"), n.daily_at), "Leave empty for none")}
+        <p class="hint">For your own automations (Alexa, blinking lights): binary_sensor.sentinel_controller_alarm, plus feed pause, maintenance, water change and power cut sensors.</p></div>`;
+  }
+  p_setup() {
+    const F = this.form("setup", ["power_cut", "data_source", "data_timeout_min"]);
+    const pc = F.power_cut, ds = F.data_source;
+    const ents = (dom) => [["", "— none —"], ...Object.keys(this._hass.states).filter((e) => dom.includes(e.split(".")[0])).sort((a, b) => this.ename(a).localeCompare(this.ename(b))).map((e) => [e, `${this.ename(e)}${this.edev(e) ? " · " + this.edev(e) : ""}`])];
+    return `${this.sec("Power cut")}<div class="card pad form">${this.formBar("setup")}
+        ${this.field("Detect power cuts", this.ctl("bool", this.f("setup", "power_cut.enabled"), pc.enabled, { r: 1 }), "Runs maintenance modes marked 'Run during a power cut'")}
+        ${pc.enabled ? `${this.field("Source", this.ctl("select", this.f("setup", "power_cut.entity"), pc.entity, { options: ents(["sensor", "binary_sensor", "input_boolean"]) }), "e.g. the inverter or EcoFlow AC input voltage")}
+        ${this.field("Power is cut when", this.ctl("seg", this.f("setup", "power_cut.mode"), pc.mode, { options: [["below", "Value is below"], ["state", "State is"]] }))}
+        ${pc.mode === "state" ? this.field("State", this.ctl("text", this.f("setup", "power_cut.state"), pc.state, { ph: "on" })) : this.field("Threshold", this.ctl("num", this.f("setup", "power_cut.threshold"), pc.threshold, { step: "any" }))}
+        ${this.field("Now", `<span data-live="pcstate"></span>`)}` : ""}</div>
+      ${this.sec("Data")}<div class="card pad form">
+        ${this.field("Default status sensor", this.ctl("select", this.f("setup", "data_source.entity"), ds.entity, { options: ents(["sensor", "binary_sensor"]) }), "Probes without their own status sensor use this one")}
+        ${this.field("OK when state is", this.ctl("text", this.f("setup", "data_source.ok_states"), ds.ok_states, { ph: "Connected" }))}
+        ${this.field("Readings older than", this.ctl("num", this.f("setup", "data_timeout_min"), F.data_timeout_min, { step: 1, min: 0, u: "min" }), "Count as missing. 0 = off — keep it off for sensors that only report changes")}</div>
+      <p class="hint">Settings are stored in Home Assistant and included in its backups. Version ${VERSION}.</p>`;
   }
 }
 
 const STYLE = `<style>
-:host{--b:#0069b4;--bd:var(--divider-color,#e0e0e0);--bg2:var(--secondary-background-color,#f5f7fa);--t2:var(--secondary-text-color,#667)}
-ha-card{overflow:hidden}
-.head{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(90deg,#0058a0,#0069b4 60%,#1b86cf);color:#fff;padding:12px 16px}
-.title{font-size:20px;font-weight:700}.title small{display:block;font-size:12px;font-weight:400;opacity:.8}
-.bell{position:relative;cursor:pointer;padding:6px}.bell.alarm{color:#ffd54f}.bell b{position:absolute;top:0;right:-4px;background:#d32f2f;color:#fff;border-radius:9px;font-size:11px;padding:0 5px}
-.wrap{display:flex;min-height:600px}.menu{width:220px;border-right:1px solid var(--bd);background:var(--bg2);flex:none}
-.nav{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;font-size:14px;border-left:3px solid transparent}
-.nav:hover{background:rgba(0,105,180,.08)}.nav.act{border-left-color:var(--b);background:rgba(0,105,180,.12);font-weight:600;color:var(--b)}
-.main{flex:1;padding:4px 18px 18px;min-width:0}
-h2{margin:12px 0 8px;font-size:20px}h3{margin:18px 0 8px;font-size:15px;color:var(--b);text-transform:uppercase;letter-spacing:.04em}h4{margin:12px 0 6px;font-size:14px}
-.savebar{position:sticky;top:0;z-index:2;display:flex;gap:8px;align-items:center;justify-content:flex-end;min-height:34px;padding:4px 0;background:var(--card-background-color,#fff);font-size:13px;color:var(--t2)}
-.savebar.dirty{color:#b26a00}.savebar span{margin-right:auto}
-.btn{border:1px solid var(--b);background:transparent;color:var(--b);border-radius:8px;padding:6px 14px;font-size:14px;cursor:pointer;margin:2px}
-.btn.primary{background:var(--b);color:#fff}.btn.warn{border-color:#d32f2f;color:#d32f2f}.btn.ghost{border-color:var(--bd);color:var(--t2)}.btn.small{padding:3px 9px;font-size:12px}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
-.tile{border:1px solid var(--bd);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:4px}.tile small{color:var(--t2)}.tile.bad{border-color:#d32f2f}
-.big{font-size:28px;font-weight:700;color:var(--b)}
-.list{border:1px solid var(--bd);border-radius:10px;overflow:hidden}.list.scroll{max-height:640px;overflow:auto}
-.chrow{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--bd)}.chrow:last-child{border-bottom:none}
-.chrow b{width:26px;color:var(--b)}.chrow .grow{flex:1;min-width:0}.chrow small{display:block;color:var(--t2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chrow .act{color:var(--t2);font-size:12px;white-space:nowrap}.click{cursor:pointer}.click:hover,.selrow{background:rgba(0,105,180,.08)}
-.pill{border-radius:9px;padding:2px 9px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap}.pill.on{background:#1f9d55}.pill.off{background:#8a9aa9}.pill.na{background:#c4ccd4}.pill.bad,.pill.warn{background:#d32f2f}
-.split{display:grid;grid-template-columns:minmax(260px,1fr) minmax(320px,1.3fr);gap:14px;align-items:start}
-.grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
-.form{border:1px solid var(--bd);border-radius:10px;padding:6px 14px 12px;margin:10px 0}.form.compact{margin:0}
-.row{display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px dashed var(--bd)}.row:last-of-type{border-bottom:none}
-.lab{flex:1;font-size:14px}.lab small{display:block;color:var(--t2);font-size:12px}.ctl{flex:1.2;min-width:0;display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-wrap:wrap}.ctl select{max-width:100%;min-width:0;width:100%}
-input,select{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;background:var(--card-background-color,#fff);color:var(--primary-text-color);max-width:100%}
-input[type=number]{width:100px}select{min-width:180px}input[type=color]{width:60px;padding:2px}
-.sw{position:relative;width:40px;height:22px}.sw input{opacity:0;width:0;height:0}.sw span{position:absolute;inset:0;background:#c4ccd4;border-radius:11px;cursor:pointer;transition:.2s}
-.sw span:before{content:"";position:absolute;width:18px;height:18px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.2s}.sw input:checked+span{background:var(--b)}.sw input:checked+span:before{transform:translateX(18px)}
-.entry{display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap}.wd{margin-right:8px;font-size:13px}
-.tabs{display:flex;gap:4px;margin-bottom:8px}.tab{padding:6px 14px;border-bottom:2px solid transparent;cursor:pointer;color:var(--t2)}.tab.act{border-bottom-color:var(--b);color:var(--b);font-weight:600}
-.alarms{border:1px solid #d32f2f;background:rgba(211,47,47,.06);border-radius:10px;padding:8px 12px;display:flex;flex-direction:column;gap:4px}
-.ok{border:1px solid #1f9d55;background:rgba(31,157,85,.06);border-radius:10px;padding:8px 12px;color:#1f9d55}
-.hint{color:var(--t2);font-size:13px}.right{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}.pad{padding:16px}.err{color:#d32f2f}
-@media (max-width:900px){.wrap{flex-direction:column}.menu{width:auto;display:flex;overflow-x:auto;border-right:none;border-bottom:1px solid var(--bd)}.nav span{white-space:nowrap}.split{grid-template-columns:1fr}}
+:host{--bg:#e9eef3;--card:#fff;--bd:#d8e1ea;--tx:#12324a;--mu:#8aa0b2;--sec:#4a6378;--ac:#0069b4;--ok:#2fa84f;--okb:#e5f5ea;--off:#9aabb9;--offb:#eef2f6;--bad:#d64545;--badb:#fdecec;--warn:#b26d00;--warnb:#fdf3e1;--infob:#e6f2fb;
+  --sh:0 1px 3px rgba(16,42,67,.12);display:block;font-family:var(--paper-font-body1_-_font-family,Roboto,system-ui,sans-serif);color:var(--tx)}
+*{box-sizing:border-box}button{font:inherit;color:inherit}
+.root{background:var(--bg);border-radius:12px;padding:12px 16px 24px;min-height:600px}
+.hdr{display:flex;align-items:stretch;border-radius:10px;overflow:hidden;box-shadow:var(--sh)}
+.ttl{flex:1;background:linear-gradient(90deg,#0058a0 0%,#0069b4 60%,#1b86cf 100%);color:#fff;padding:12px 18px;display:flex;flex-direction:column}
+.ttl b{font-size:20px;font-weight:700}.ttl span{font-size:14px;opacity:.85;min-height:18px}
+.bell{width:68px;border:none;background:#0069b4;color:#fff;cursor:pointer;position:relative;border-left:2px solid rgba(255,255,255,.35)}
+.bell ha-icon{--mdc-icon-size:28px}.bell b{position:absolute;top:10px;right:10px;background:var(--bad);color:#fff;border-radius:9px;font-size:11px;min-width:18px;height:18px;line-height:18px;padding:0 4px}
+.tabs{display:flex;gap:4px;overflow-x:auto;margin:12px 0 4px;padding:4px;background:var(--card);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--sh);scrollbar-width:none}
+.tab{display:flex;align-items:center;gap:6px;border:none;background:none;padding:8px 12px;border-radius:8px;cursor:pointer;color:var(--sec);font-weight:600;font-size:14px;white-space:nowrap}
+.tab ha-icon{--mdc-icon-size:18px}.tab:hover{background:var(--offb)}.tab.on{background:var(--ac);color:#fff}
+.sec{display:flex;align-items:center;justify-content:space-between;margin:18px 2px 8px;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sec)}
+.sec .btn.link{text-transform:none;letter-spacing:0;font-size:13px}
+.grid{display:grid;gap:10px}.g2{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}.g3{grid-template-columns:repeat(auto-fill,minmax(290px,1fr))}.g4{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--sh);text-align:left;display:block;width:100%;padding:0}
+button.card,.card button.oc,.card button.lh{cursor:pointer;transition:box-shadow .15s,border-color .15s}
+button.card:hover,.card:has(button.oc:hover),.card:has(button.lh:hover){border-color:#b6c7d6;box-shadow:0 3px 10px rgba(16,42,67,.14)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.pad{padding:12px 16px}.cap{display:block;font-size:11px;color:var(--mu);font-weight:600;text-transform:uppercase;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.muted{color:var(--mu)}small{font-size:12px}
+.probe{padding:12px 14px}.pn{display:block;font-size:15px}.pv{display:flex;align-items:baseline;gap:6px;margin:6px 0 8px}.big{font-size:34px;font-weight:700;color:var(--ac);line-height:1}.u{color:var(--mu);font-weight:600}.pv .chip{margin-left:auto}
+.band{position:relative;height:8px;border-radius:4px;background:var(--offb)}.band i{position:absolute;top:0;bottom:0;border-radius:4px}.band .alm{background:#f3c4c4}.band .ctl{background:#a9d1f0}
+.band b{position:absolute;top:-4px;width:4px;height:16px;margin-left:-2px;border-radius:2px;background:var(--tx)}
+.kv{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:10px;font-size:13px;color:var(--sec)}.kv b{color:var(--tx)}
+.oc{display:flex;align-items:center;gap:12px;padding:10px 14px;border:none;background:none;width:100%;text-align:left;border-radius:10px}
+.oi{width:38px;height:38px;border-radius:50%;background:var(--offb);display:flex;align-items:center;justify-content:center;flex:none;color:var(--ac)}.oi ha-icon{--mdc-icon-size:21px}
+.ot{flex:1;min-width:0}.ot b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ot small{display:block;color:var(--sec);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex:none;max-width:42%}.os small{color:var(--mu);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.manual{display:flex;gap:8px;align-items:center;justify-content:flex-end;padding:0 14px 10px}
+.pill{display:inline-block;min-width:46px;text-align:center;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:700;color:#fff;background:var(--off)}.pill.on{background:var(--ok)}.pill.unk{background:var(--mu)}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:12px;font-size:12px;font-weight:600;background:var(--offb);color:var(--sec);white-space:nowrap}
+.chip ha-icon{--mdc-icon-size:14px}.chip.ok{background:var(--okb);color:#1e7a39}.chip.bad{background:var(--badb);color:#b02a2a}.chip.warn{background:var(--warnb);color:var(--warn)}.chip.info{background:var(--infob);color:var(--ac)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}.row-btns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.warnc,.badc{display:flex;align-items:center;gap:3px}.warnc{color:var(--warn)!important}.badc{color:var(--bad)!important}.warnc ha-icon,.badc ha-icon{--mdc-icon-size:14px}
+.mode{padding:12px 14px;display:flex;flex-direction:column;gap:8px}.mh{display:flex;align-items:center;gap:8px}.mh b{flex:1}.mh>ha-icon{color:var(--ac)}
+.mode-st{display:flex;align-items:baseline;gap:6px;min-height:28px}.cd{font-size:24px;font-weight:700;color:var(--ac)}
+.prog{height:6px;border-radius:3px;background:var(--offb);overflow:hidden;margin:6px 0 10px}.prog i{display:block;height:100%;background:var(--ac);transition:width 1s linear}
+.mode [data-live] .btn{width:100%;justify-content:center}
+.lh{display:flex;align-items:center;gap:12px;padding:12px 14px;border:none;background:none;width:100%;text-align:left;border-radius:10px}.lh div{flex:1;min-width:0}.lh b{display:block}.lh small{color:var(--sec)}
+.lvl>[data-live]{display:block;padding:0 14px 12px}
+.ic{width:38px;height:38px;border-radius:50%;background:var(--infob);color:var(--ac);display:flex;align-items:center;justify-content:center;flex:none;--mdc-icon-size:21px}
+.sched{padding:12px 14px}.sh{display:flex;align-items:center;gap:12px;margin-bottom:10px}.sh div{flex:1;min-width:0}.sh b{display:block}.sh small{color:var(--sec)}
+.dot{width:14px;height:14px;border-radius:50%;flex:none;margin:0 12px;border:1px solid rgba(0,0,0,.1)}
+.tl{position:relative;height:14px;border-radius:7px;background:var(--offb);overflow:hidden}.tl i{position:absolute;top:0;bottom:0;opacity:.85}.tl i.tick{width:3px;margin-left:-1px;opacity:1}
+.tl .now{position:absolute;top:0;bottom:0;width:2px;background:var(--bad)}.tlx{display:flex;justify-content:space-between;font-size:10px;color:var(--mu);margin-top:2px}
+.sens{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px}.sens b{display:block}
+.gate{padding:12px 14px;display:flex;flex-direction:column;gap:4px}.gh{display:flex;align-items:center;gap:8px}.gh b{flex:1}.op{font-size:11px;font-weight:800;color:#fff;background:var(--ac);padding:2px 7px;border-radius:6px}
+.rem{display:flex;align-items:center;gap:12px;padding:12px 14px}.rem div{flex:1}.rem b{display:block}.rem small{color:var(--sec)}
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 10px}.grow{flex:1}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--ac);background:var(--card);color:var(--ac);border-radius:8px;padding:7px 14px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn ha-icon{--mdc-icon-size:18px}.btn.primary{background:var(--ac);color:#fff}.btn.warn{border-color:var(--bad);color:var(--bad)}.btn.ghost{border-color:var(--bd);color:var(--sec)}.btn.danger{color:var(--bad)}
+.btn.sm{padding:4px 10px;font-size:13px}.btn.icon{padding:4px 6px}.btn.link{border:none;background:none;padding:0 2px;color:var(--ac);font-size:13px}
+.btn:hover{filter:brightness(.96)}.btn.primary:hover{filter:brightness(1.08)}
+.banner{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;margin-top:12px;border:1px solid}.banner span{flex:1}
+.banner.ok{background:var(--okb);border-color:#bfe6cb;color:#1e7a39}.banner.bad{background:var(--badb);border-color:#f3c4c4;color:#8f2020}.banner.warn{background:var(--warnb);border-color:#f2d9a8;color:#7a4e08}
+.banner.list{flex-direction:column;align-items:stretch;gap:6px}.al{display:flex;align-items:center;gap:8px}.al span{flex:1}
+.empty{grid-column:1/-1;background:var(--card);border:1px dashed #c3d1dd;border-radius:10px;padding:26px;text-align:center;color:var(--sec)}
+.empty ha-icon{--mdc-icon-size:36px;color:var(--mu)}.empty b{display:block;margin:6px 0 2px;color:var(--tx);font-size:16px}.empty p{margin:0 auto 12px;max-width:520px}
+.hint{color:var(--sec);font-size:13px;margin:6px 0;line-height:1.45}
+.form .fld{border-bottom:1px solid var(--offb)}.form .fld:last-of-type{border-bottom:none}
+.formbar{display:none}.formbar.on{display:flex;align-items:center;gap:8px;justify-content:flex-end;padding:4px 0 10px;color:var(--warn);font-size:13px}.formbar span{margin-right:auto}
+.scrim{position:fixed;inset:0;background:rgba(18,50,74,.35);z-index:10;animation:fade .15s}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(580px,100vw);background:var(--bg);z-index:11;display:flex;flex-direction:column;box-shadow:-8px 0 30px rgba(16,42,67,.25);animation:slide .18s ease-out}
+@keyframes slide{from{transform:translateX(30px);opacity:.4}}@keyframes fade{from{opacity:0}}
+.drawer header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:linear-gradient(90deg,#0058a0,#0069b4 60%,#1b86cf);color:#fff}
+.drawer header small{opacity:.85;font-size:11px;text-transform:uppercase;letter-spacing:.12em;font-weight:700}.drawer header h2{margin:2px 0 0;font-size:19px}
+.x{border:none;background:rgba(255,255,255,.15);color:#fff;border-radius:8px;padding:6px;cursor:pointer;display:flex}
+.dbody{flex:1;overflow:auto;padding:14px 18px 24px}.dbody>*{margin-bottom:10px}
+.dfoot{display:flex;align-items:center;gap:8px;padding:12px 18px;background:var(--card);border-top:1px solid var(--bd)}.dfoot .dirty{flex:1;color:var(--warn);font-size:13px;text-align:right}
+.lbl{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sec);margin:18px 0 6px!important}
+.fld{display:flex;align-items:center;gap:12px;padding:8px 0}.fl{flex:1;font-size:14px;font-weight:500;min-width:0}.fl small{display:block;color:var(--mu);font-weight:400;margin-top:2px;line-height:1.35}
+.fc{display:flex;align-items:center;gap:6px;justify-content:flex-end;flex:0 1 auto;max-width:64%;flex-wrap:wrap}
+.dbody>.fld{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px 12px}
+input,select{font:inherit;font-size:14px;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);min-width:0;max-width:100%}
+input:focus,select:focus{border-color:var(--ac)}
+input[type=text]{width:250px}input[type=number]{width:96px;text-align:right}select{max-width:300px}input[type=color]{width:52px;height:36px;padding:2px}
+.num{display:inline-flex;align-items:center;gap:6px}.num em{font-style:normal;color:var(--mu);font-size:13px}
+.sw{position:relative;width:44px;height:24px;flex:none;display:inline-block}.sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}.sw span{position:absolute;inset:0;background:#c5d2de;border-radius:12px;transition:.2s}
+.sw span:before{content:"";position:absolute;width:20px;height:20px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.2)}.sw input:checked+span{background:var(--ac)}.sw input:checked+span:before{transform:translateX(20px)}
+.sw input:focus-visible+span{outline:2px solid var(--ac);outline-offset:2px}
+.seg{display:inline-flex;background:var(--offb);border-radius:8px;padding:3px;gap:2px;flex-wrap:wrap}.seg button{border:none;background:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;color:var(--sec)}
+.seg button.on{background:var(--card);color:var(--ac);box-shadow:var(--sh)}
+.ftiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px}
+.ftile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);cursor:pointer;text-align:left}
+.ftile:hover{border-color:#b6c7d6}.ftile ha-icon{color:var(--ac);--mdc-icon-size:22px;margin-bottom:2px}.ftile b{font-size:14px}.ftile small{color:var(--mu);line-height:1.3}
+.ftile.on{border-color:var(--ac);background:var(--infob);box-shadow:0 0 0 1px var(--ac) inset}
+.detail:empty{display:none}.detail{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:6px 12px}.detail .detail{border:none;padding:0}
+.sentence{background:var(--infob);border-radius:8px;padding:10px 12px;margin:6px 0;font-size:14px;line-height:1.5}
+.preview{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ac);border-radius:10px;padding:10px 12px;font-size:14px}
+.preview ha-icon{--mdc-icon-size:22px;flex:none}.okc{color:var(--ok)}
+.note{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;font-size:13px}.note span{flex:1}.note.warn{background:var(--warnb);color:#7a4e08}.note.bad{background:var(--badb);color:#8f2020}.note ha-icon{--mdc-icon-size:18px;flex:none}
+details{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:0 12px}details[open]{padding-bottom:10px}summary{cursor:pointer;padding:12px 0;font-weight:600;color:var(--sec)}
+details .fld{border-top:1px solid var(--offb)}details .picker{margin:6px 0}
+.picker{background:var(--card);border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+.pk-cur{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--bd)}.pk-cur div{flex:1;min-width:0}.pk-cur b{display:block}.pk-cur small{color:var(--mu);word-break:break-all}.pk-cur.none{color:var(--mu)}
+.pk-cur .st,.pk-i .st{font-size:12px;color:var(--sec);background:var(--offb);border-radius:8px;padding:2px 8px;white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis;flex:none}
+.pk-q{width:calc(100% - 24px)!important;margin:10px 12px 6px}.pk-list{max-height:230px;overflow:auto;padding-bottom:6px}
+.pk-g{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--sec);padding:8px 12px 4px;background:#f6f8fa;position:sticky;top:0}
+.pk-i{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer}.pk-i:hover,.pk-i.sel{background:var(--infob)}.pk-i .nm{flex:1;min-width:0}.pk-i small{display:block;color:var(--mu);font-size:11px;overflow:hidden;text-overflow:ellipsis}.pk-i.clear{color:var(--bad)}
+.prow{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;flex-wrap:wrap}.prow>span{color:var(--sec);font-size:13px;font-weight:600}
+.days{display:flex;gap:6px;flex-wrap:wrap}.day{border:1px solid var(--bd);background:var(--card);border-radius:18px;padding:7px 12px;cursor:pointer;font-weight:600;color:var(--sec)}.day.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.presets{display:flex;gap:14px}.gin{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0}
+.checks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}.chk{display:flex;align-items:center;gap:6px;background:var(--offb);border-radius:8px;padding:6px 10px;cursor:pointer}
+.toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;background:var(--tx);color:#fff;padding:10px 18px;border-radius:10px;z-index:20;transition:.25s;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:90vw}.toast.in{opacity:1;transform:translate(-50%,0)}.toast.bad{background:var(--bad)}
+@media (max-width:700px){.root{padding:8px}.g2,.g3,.g4{grid-template-columns:1fr}.tab span{display:none}.tab.on span{display:inline}.fld{flex-wrap:wrap}.fc{max-width:100%;width:100%;justify-content:flex-start}input[type=text]{width:100%}.ftiles{grid-template-columns:1fr 1fr}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>`;
 
 if (!customElements.get("sentinel-controller-card")) customElements.define("sentinel-controller-card", SentinelControllerCard);

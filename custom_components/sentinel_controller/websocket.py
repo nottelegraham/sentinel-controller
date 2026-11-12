@@ -45,6 +45,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_save)
     websocket_api.async_register_command(hass, ws_action)
     websocket_api.async_register_command(hass, ws_subscribe)
+    websocket_api.async_register_command(hass, ws_preview)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sentinel_controller/get"})
@@ -103,3 +104,17 @@ def ws_subscribe(hass, connection, msg):
     connection.subscriptions[msg["id"]] = async_dispatcher_connect(hass, SIGNAL_UPDATE, forward)
     connection.send_result(msg["id"])
     forward()
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sentinel_controller/preview",
+                                  vol.Required("kind"): vol.In(["channel", "logic"]), vol.Required("item"): dict})
+@callback
+def ws_preview(hass, connection, msg):
+    rt = _rt(hass)
+    if not rt or not rt.ctl:
+        connection.send_error(msg["id"], "not_loaded", "Sentinel Controller is not set up.")
+        return
+    try:
+        connection.send_result(msg["id"], _status_json(rt.preview(msg["kind"], msg["item"])))
+    except (ValueError, TypeError, KeyError) as err:
+        connection.send_error(msg["id"], "invalid", str(err))

@@ -228,23 +228,25 @@ class Controller:
         v = _to_float(inp.state)
         if v is None:
             return None
-        if not self._source_ok(inputs):
+        if not self._source_ok(inputs, p.get("status_entity"), p.get("status_ok")):
             return None
         timeout = float(self.config.get("data_timeout_min") or 0)
         if timeout > 0 and inp.updated is not None and (now - inp.updated) > timedelta(minutes=timeout):
             return None
         return v
 
-    def _source_ok(self, inputs: dict[str, Input]) -> bool:
-        """Optional data-source check, e.g. a bridge connection sensor that must read 'Connected'."""
-        ds = self.config.get("data_source") or {}
-        ent = ds.get("entity")
+    def _source_ok(self, inputs: dict[str, Input], ent: str | None = None, ok_states: str | None = None) -> bool:
+        """Data-source check, e.g. a bridge connection sensor that must read 'Connected'.
+        A probe's own status sensor wins; otherwise the global data_source applies."""
+        if not ent:
+            ds = self.config.get("data_source") or {}
+            ent, ok_states = ds.get("entity"), ds.get("ok_states")
         if not ent:
             return True
         inp = inputs.get(ent)
         if not inp or inp.state is None:
             return False
-        ok = [x.strip().lower() for x in str(ds.get("ok_states") or "").split(",") if x.strip()]
+        ok = [x.strip().lower() for x in str(ok_states or "").split(",") if x.strip()]
         return str(inp.state).strip().lower() in ok if ok else str(inp.state).lower() not in UNKNOWN_STATES
 
     def _probe_alarm(self, p: dict, v: float | None, wc_active: bool) -> bool:

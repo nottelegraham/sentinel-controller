@@ -71,3 +71,24 @@ async def test_full_flow(hass, hass_ws_client):
     rt = hass.data[DOMAIN]["runtime"]
     assert rt.ctl.config["channels"][0]["entity"] == "input_boolean.heater"
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_preview(hass, hass_ws_client):
+    assert await async_setup_component(hass, "input_boolean", {"input_boolean": {"heater": {"name": "Heater"}}})
+    hass.states.async_set("sensor.tank_temp", "76.5")
+    entry = MockConfigEntry(domain=DOMAIN, data={}, title="Sentinel Controller")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    ws = await hass_ws_client(hass)
+    probes = [{"id": "p1", "name": "Tank", "kind": "temperature", "entity": "sensor.tank_temp",
+               "nominal": 77, "hysteresis": 0.36, "alarm": {"active": False}}]
+    await ws.send_json({"id": 1, "type": "sentinel_controller/save", "section": "probes", "value": probes})
+    assert (await ws.receive_json())["success"]
+    await ws.send_json({"id": 2, "type": "sentinel_controller/preview", "kind": "channel",
+                        "item": {"n": 5, "fn": {"type": "temperature", "param": "p1", "mode": "heater"}}})
+    r = await ws.receive_json()
+    assert r["success"] and r["result"]["out"] is True, r
+    assert hass.states.get("input_boolean.heater").state == "off"  # preview never switches anything
+    assert hass.data[DOMAIN]["runtime"].ctl.config["channels"][4]["fn"]["type"] == "always_off"
+    assert await hass.config_entries.async_unload(entry.entry_id)

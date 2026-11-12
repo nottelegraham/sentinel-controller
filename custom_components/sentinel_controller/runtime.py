@@ -90,7 +90,7 @@ class Runtime:
     # ------------------------------------------------------------------ inputs
     def _entities_needed(self) -> set[str]:
         cfg = self.ctl.config
-        ents = {p.get("entity") for p in cfg["probes"]}
+        ents = {p.get("entity") for p in cfg["probes"]} | {p.get("status_entity") for p in cfg["probes"]}
         ents |= {s.get("entity") for s in cfg["level_sensors"]}
         ents.add((cfg.get("power_cut") or {}).get("entity"))
         ents.add((cfg.get("data_source") or {}).get("entity"))
@@ -223,6 +223,29 @@ class Runtime:
                 svc = t.split(".", 1)[1] if t.startswith("notify.") else t
                 self.hass.async_create_task(self.hass.services.async_call(
                     "notify", svc, {"title": title, "message": message}, blocking=False))
+
+    # ------------------------------------------------------------------ preview
+    def preview(self, kind: str, item: dict) -> dict:
+        """Evaluate a draft channel or logic gate against current data without changing anything."""
+        import copy
+        from .logic import Controller
+        sim = Controller(copy.deepcopy(self.ctl.config), copy.deepcopy(self.ctl.rt))
+        key = "channels" if kind == "channel" else "logic"
+        n = int(item.get("n", 0))
+        for i, it in enumerate(sim.config[key]):
+            if it.get("n") == n:
+                merged = copy.deepcopy(it)
+                merged.update(item)
+                if kind == "channel":
+                    merged["entity"] = merged.get("entity") or "preview"
+                sim.config[key][i] = merged
+                break
+        else:
+            raise ValueError(f"No {key[:-1]} {n}")
+        st = sim.tick(dt_util.now(), self._inputs())
+        if kind == "channel":
+            return st["channels"].get(n) or {}
+        return {"out": st["logic"].get(n), "reason": ""}
 
     # ------------------------------------------------------------------ actions
     async def async_action(self, action: str, n: int | None = None, value: Any = None) -> None:

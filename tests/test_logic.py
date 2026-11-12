@@ -299,3 +299,13 @@ def test_steady_value_is_not_stale_by_default_and_source_check():
     assert s["probes"]["t1"]["value"] is None
     s = c.tick(T0, {"sensor.temp": Input("77.0", T0), "sensor.bridge": Input("Connected", T0)})
     assert s["probes"]["t1"]["value"] == 77.0
+
+
+def test_per_probe_status_entity_overrides_global():
+    p = dict(TEMP)
+    p.update(status_entity="sensor.hydros_online", status_ok="Online")
+    c = ctl(probes=[p])
+    c.config["data_source"] = {"entity": "sensor.ghl_conn", "ok_states": "Connected"}
+    s = c.tick(T0, {"sensor.temp": Input("77", T0), "sensor.ghl_conn": Input("Disconnected", T0),
+                    "sensor.hydros_online": Input("Online", T0)})
+    assert s["probes"]["t1"]["value"] == 77.0
