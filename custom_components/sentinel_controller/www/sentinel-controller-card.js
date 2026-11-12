@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.5";
+const VERSION = "0.2.6";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -1113,6 +1113,8 @@ details .fld{border-top:1px solid var(--offb)}details .picker{margin:6px 0}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>`;
 
+if (!customElements.get("sentinel-controller-card-impl")) customElements.define("sentinel-controller-card-impl", class extends SentinelControllerCard {});
+// Loaded directly (without the loader): register the card name too.
 if (!customElements.get("sentinel-controller-card")) customElements.define("sentinel-controller-card", SentinelControllerCard);
 window.customCards = window.customCards || [];
 if (!window.customCards.find((c) => c.type === "sentinel-controller-card"))
