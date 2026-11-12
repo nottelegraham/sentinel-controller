@@ -132,10 +132,10 @@ const sleep = (t = 10) => new Promise((r) => setTimeout(r, t));
   // doser sections: name pump 2 into its own section, saved from Setup
   q('[data-tab="setup"]').click(); await sleep();
   const ds2 = q('input[data-f="setup|doser_sections.d4.2"]');
-  if (!ds2) errs.push("no doser section field"); else { ds2.value = "Doser Maxi EXT"; ds2.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(); q('[data-act="form_save"]').click(); await sleep(30);
+  if (!ds2) errs.push("no doser section field"); else { ds2.value = "Doser Maxi EXT"; ds2.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(); const dn2 = q('input[data-f="setup|doser_names.d4.2"]'); if (!dn2) errs.push("no pump name field"); else { dn2.value = "Sodium hydroxide"; dn2.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(); } q('[data-act="form_save"]').click(); await sleep(30);
     if (JSON.stringify(fx.config.doser_sections) !== JSON.stringify({ d4: { 2: "Doser Maxi EXT" } })) errs.push("doser sections save wrong " + JSON.stringify(fx.config.doser_sections));
     q('[data-tab="dosers"]').click(); await sleep(); const t3 = q(".page").textContent;
-    if (!t3.includes("Dosing · GHL Doser") || !t3.includes("Dosing · Doser Maxi EXT")) errs.push("doser sections not applied: " + t3.replace(/\s+/g, " ").slice(0, 200)); }
+    if (!t3.includes("Dosing · GHL Doser") || !t3.includes("Dosing · Doser Maxi EXT") || !t3.includes("Sodium hydroxide")) errs.push("doser sections not applied: " + t3.replace(/\s+/g, " ").slice(0, 200)); }
   // live updates don't throw
   el._onStatus(fx.status); await sleep();
   console.log(errs.length ? "ERRORS:\n" + errs.join("\n") : "SMOKE OK", "| toasts:", toasts.join(" / "));

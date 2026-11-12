@@ -165,6 +165,10 @@ class SentinelControllerCard extends HTMLElement {
     return out.sort((a, b) => a.name.localeCompare(b.name));
   }
   pumpName(d, p) {
+    const own = String(((this.cfg.doser_names || {})[d.device_id] || {})[p.n] || "").trim(); if (own) return own;
+    return this.autoPumpName(d, p);
+  }
+  autoPumpName(d, p) {
     const src = p.pct || p.state || p.vol; let n = this.ename(src);
     if (n.toLowerCase().startsWith(d.name.toLowerCase() + " ")) n = n.slice(d.name.length + 1);
     n = n.replace(/\s*(volume|state)(\s*ml)?$/i, "").replace(/^pump \d+\s*/i, "");
@@ -1080,10 +1084,11 @@ class SentinelControllerCard extends HTMLElement {
     return `<div class="lbl">${esc(title)}</div><div class="srcs">${rows}</div>`;
   }
   p_setup() {
-    const F = this.form("setup", ["power_cut", "data_source", "data_timeout_min", "controllers", "source_kinds", "doser_sections"]);
+    const F = this.form("setup", ["power_cut", "data_source", "data_timeout_min", "controllers", "source_kinds", "doser_sections", "doser_names"]);
     if (!F.controllers.length && !this.forms.setup.ctrlInit) { F.controllers = this.controllers().map((c) => ({ ...c })); this.forms.setup.ctrlInit = true; }
     if (!F.source_kinds) F.source_kinds = {};  // card newer than the saved config
     if (!F.doser_sections) F.doser_sections = {};
+    if (!F.doser_names) F.doser_names = {};
     const chosen = new Set(F.controllers.map((c) => c.device_id));
     const cands = this.ctrlCandidates(), others = cands.filter((c) => c.kind === "other");
     const pc = F.power_cut, ds = F.data_source;
@@ -1103,8 +1108,10 @@ class SentinelControllerCard extends HTMLElement {
           : this.btn("other_src", `Show other devices with switches (${others.length})`, {}, "link")) : ""}
         <p class="hint">Other devices are things like cars, appliances, power stations, pumps and wall light switches: they have switches but aren't outlets. Device in the wrong group? ${this.btn("edit_kinds", this.editKinds ? "Done" : "Fix groups", {}, "link")}</p></div>
       ${this.dosers().length ? `${this.sec("Dosing heads")}<div class="card pad form">
-        <p class="hint">Section each pump is shown under on the Overview and Dosers tabs. Pumps next to each other with the same section share a heading — for example pumps 1–4 "Doser 2.1" and pumps 5–6 "Doser Maxi EXT". Leave empty to use the doser's name.</p>
-        ${this.dosers().map((d) => d.pumps.map((p) => this.field(`${d.name} · Pump ${p.n} · ${this.pumpName(d, p)}`, this.ctl("text", this.f("setup", `doser_sections.${d.device_id}.${p.n}`), ((F.doser_sections || {})[d.device_id] || {})[p.n] || "", { ph: d.name }))).join("")).join("")}</div>` : ""}
+        <p class="hint">Name each pump and the section it is shown under on the Overview and Dosers tabs. Pumps next to each other with the same section share a heading — for example pumps 1–4 "Doser 2.1" and pumps 5–6 "Doser Maxi EXT". Leave a box empty to use what the doser reports.</p>
+        <div class="dheads">${this.dosers().map((d) => d.pumps.map((p) => `<div class="dhead"><span class="cap">${esc(d.name)} · Pump ${p.n}</span>
+          <label><span>Name</span>${this.ctl("text", this.f("setup", `doser_names.${d.device_id}.${p.n}`), ((F.doser_names || {})[d.device_id] || {})[p.n] || "", { ph: this.autoPumpName(d, p) })}</label>
+          <label><span>Section</span>${this.ctl("text", this.f("setup", `doser_sections.${d.device_id}.${p.n}`), ((F.doser_sections || {})[d.device_id] || {})[p.n] || "", { ph: d.name })}</label></div>`).join("")).join("")}</div></div>` : ""}
       ${this.sec("Data")}<div class="card pad form">
         ${this.field("Default status sensor", this.ctl("select", this.f("setup", "data_source.entity"), ds.entity, { options: ents(["sensor", "binary_sensor"]) }), "Probes without their own status sensor use this one")}
         ${this.field("OK when state is", this.ctl("text", this.f("setup", "data_source.ok_states"), ds.ok_states, { ph: "Connected" }))}
@@ -1226,7 +1233,8 @@ details .fld{border-top:1px solid var(--offb)}details .picker{margin:6px 0}
 .pdot.ok{color:#2fa84f}.pdot.bad{color:#d9312b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pname{display:block;font-weight:700;color:#12324a;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pline{font-size:13px;color:#6b8296}.pline b{color:#12324a}.pday{font-size:11px;color:#6b8296;margin-top:2px}
-.dgroups{display:flex;flex-wrap:wrap;gap:0 16px}.dgroup{min-width:0}.dgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.dheads{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}.dhead{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--bd);border-radius:8px}.dhead label{display:grid;grid-template-columns:64px 1fr;align-items:center;gap:8px;font-size:13px;color:var(--sec)}
+.dgroups{display:flex;flex-wrap:wrap;gap:0 16px}.dgroup{min-width:0}.dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
 .hdrchips{display:inline-flex;gap:6px;text-transform:none;letter-spacing:0}
 .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;background:var(--tx);color:#fff;padding:10px 18px;border-radius:10px;z-index:20;transition:.25s;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:90vw}.toast.in{opacity:1;transform:translate(-50%,0)}.toast.bad{background:var(--bad)}
 @media (max-width:700px){.root{padding:8px}.g2,.g3,.g4{grid-template-columns:1fr}.tab span{display:none}.tab.on span{display:inline}.fld{flex-wrap:wrap}.fc{max-width:100%;width:100%;justify-content:flex-start}input[type=text]{width:100%}.ftiles{grid-template-columns:1fr 1fr}}
