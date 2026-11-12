@@ -1,7 +1,7 @@
 /* Sentinel Controller card — ProfiLux-4-style control scheme for Home Assistant.
  * Menu and settings follow the GHL "ProfiLux 4 / 4e Resource Guide (GHL Connect edition)". */
 (() => {
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -591,7 +591,7 @@ h2{margin:12px 0 8px;font-size:20px}h3{margin:18px 0 8px;font-size:15px;color:va
 .grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
 .form{border:1px solid var(--bd);border-radius:10px;padding:6px 14px 12px;margin:10px 0}.form.compact{margin:0}
 .row{display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px dashed var(--bd)}.row:last-of-type{border-bottom:none}
-.lab{flex:1;font-size:14px}.lab small{display:block;color:var(--t2);font-size:12px}.ctl{flex:1.2;display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-wrap:wrap}
+.lab{flex:1;font-size:14px}.lab small{display:block;color:var(--t2);font-size:12px}.ctl{flex:1.2;min-width:0;display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-wrap:wrap}.ctl select{max-width:100%;min-width:0;width:100%}
 input,select{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;background:var(--card-background-color,#fff);color:var(--primary-text-color);max-width:100%}
 input[type=number]{width:100px}select{min-width:180px}input[type=color]{width:60px;padding:2px}
 .sw{position:relative;width:40px;height:22px}.sw input{opacity:0;width:0;height:0}.sw span{position:absolute;inset:0;background:#c4ccd4;border-radius:11px;cursor:pointer;transition:.2s}
