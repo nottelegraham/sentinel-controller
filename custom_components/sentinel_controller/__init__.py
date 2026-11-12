@@ -46,8 +46,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     card = Path(__file__).parent / "www" / "sentinel-controller-card.js"
     digest = await hass.async_add_executor_job(lambda: hashlib.sha1(card.read_bytes()).hexdigest()[:10])
     hass.http.register_view(CardVersionView(f"{CARD_VERSION}-{digest}"))
-    # The loader URL never changes, so a stale cached page still reaches the current card build.
-    add_extra_js_url(hass, f"{STATIC_URL}/sentinel-controller-loader.js")
+    # Versioned loader URL: every install/restart gets a fresh loader; the loader itself also asks
+    # for the current build, so even a stale cached page reaches the installed card.
+    add_extra_js_url(hass, f"{STATIC_URL}/sentinel-controller-loader.js?v={CARD_VERSION}-{digest}")
     sc_ws.async_register(hass)
 
     async def handle(call: ServiceCall) -> None:
