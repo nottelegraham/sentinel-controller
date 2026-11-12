@@ -1089,7 +1089,7 @@ class SentinelControllerCard extends HTMLElement {
       const subs = on ? `<div class="onames">${ents.map((e) => `<div class="oname">${ents.length > 1
           ? `<label class="chk"><input type="checkbox" data-ctrlout="${esc(e)}" data-dev="${esc(c.device_id)}" ${pick.has(e) ? "checked" : ""}><span>${esc(this.shortName(e, c.name))}</span></label>`
           : `<span class="chk solo">${esc(this.shortName(e, c.name))}</span>`}
-        <input type="text" data-oname="${esc(e)}" value="${esc(names[e] || "")}" placeholder="Name shown on the dashboard" aria-label="Name for ${esc(this.shortName(e, c.name))}"></div>`).join("")}</div>` : "";
+        <input type="text" data-oname="${esc(e)}" value="${esc(names[e] || "")}" placeholder="Your name for it" aria-label="Name for ${esc(this.shortName(e, c.name))}"></div>`).join("")}</div>` : "";
       const fixer = this.editKinds ? `<select class="kindsel" data-kind="${esc(c.device_id)}" aria-label="Group for ${esc(c.name)}">${[["controller", "Reef controller"], ["strip", "Power strip or plug"], ["other", "Other device"]].map(([k, l]) => `<option value="${k}" ${c.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>` : "";
       return `<div class="src"><div class="srow"><label class="chk"><input type="checkbox" data-ctrl="${esc(c.device_id)}" data-name="${esc(c.name)}" ${on ? "checked" : ""}><span>${esc(c.name)} <small class="muted">${n}${on && n !== ents.length ? " of " + ents.length : ""}</small></span></label>${fixer}</div>${subs}</div>`;
     }).join("");
