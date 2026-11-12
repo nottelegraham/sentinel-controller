@@ -1,0 +1,31 @@
+start_feed_pause:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 4}}}
+stop_feed_pause:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 4}}}
+start_maintenance:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 4}}}
+stop_maintenance:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 4}}}
+start_water_change:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 8}}}
+stop_water_change:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 8}}}
+reset_level_error:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 8}}}
+acknowledge_reminder:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 16}}}
+manual_override:
+  fields:
+    value: {required: true, selector: {boolean: {}}}
+channel_manual:
+  fields:
+    n: {required: true, selector: {number: {min: 1, max: 48}}}
+    value: {required: true, selector: {boolean: {}}}

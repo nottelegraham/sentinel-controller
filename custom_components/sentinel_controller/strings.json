@@ -1,0 +1,119 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sentinel Controller",
+        "description": "Adds a ProfiLux-4-style controller (switch channels, timers, feed pauses, maintenance, level control, programmable logic) run by Home Assistant. Configure it from the Sentinel Controller card."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Sentinel Controller is already set up."
+    }
+  },
+  "services": {
+    "start_feed_pause": {
+      "name": "Start feed pause",
+      "description": "Start feed pause.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "stop_feed_pause": {
+      "name": "Stop feed pause",
+      "description": "Stop feed pause.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "start_maintenance": {
+      "name": "Start maintenance mode",
+      "description": "Start maintenance mode.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "stop_maintenance": {
+      "name": "Stop maintenance mode",
+      "description": "Stop maintenance mode.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "start_water_change": {
+      "name": "Start water change",
+      "description": "Start water change.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "stop_water_change": {
+      "name": "Stop water change",
+      "description": "Stop water change.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "reset_level_error": {
+      "name": "Reset level circuit error",
+      "description": "Reset level circuit error.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "acknowledge_reminder": {
+      "name": "Acknowledge reminder",
+      "description": "Acknowledge reminder.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        }
+      }
+    },
+    "manual_override": {
+      "name": "Manual override",
+      "description": "Manual override.",
+      "fields": {
+        "value": {
+          "name": "Value",
+          "description": "On or off."
+        }
+      }
+    },
+    "channel_manual": {
+      "name": "Set channel manual state",
+      "description": "Set channel manual state.",
+      "fields": {
+        "n": {
+          "name": "Number",
+          "description": "Number of the item."
+        },
+        "value": {
+          "name": "Value",
+          "description": "On or off."
+        }
+      }
+    }
+  }
+}
