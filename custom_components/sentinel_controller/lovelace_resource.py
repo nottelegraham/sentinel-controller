@@ -24,7 +24,7 @@ def _collection(hass: HomeAssistant):
     return res if res is not None and hasattr(res, "async_create_item") else None
 
 
-async def _ensure(hass: HomeAssistant, base: str, url: str) -> None:
+async def _ensure(hass: HomeAssistant, base: str, url: str, also: tuple[str, ...]) -> None:
     res = _collection(hass)
     if res is None:  # YAML resource mode or lovelace not loaded: extra JS URL still covers browsers
         _LOGGER.debug("Lovelace storage resources unavailable; not registering %s", base)
@@ -32,18 +32,26 @@ async def _ensure(hass: HomeAssistant, base: str, url: str) -> None:
     if not res.loaded:
         await res.async_load()
         res.loaded = True
-    for item in res.async_items():
-        if item.get("url", "").split("?")[0] == base:
-            if item["url"] != url:
-                await res.async_update_item(item["id"], {"res_type": "module", "url": url})
-            return
+    # Match any resource that loads a copy of this file (hand-added, /local/ copies, old
+    # versions): point the first at the served card, delete the rest, so no stale copy
+    # can register the element before the current one.
+    names = {base.rsplit("/", 1)[-1], *also}
+    matches = [i for i in res.async_items()
+               if i.get("url", "").split("?")[0].rsplit("/", 1)[-1] in names]
+    if matches:
+        keep, *extra = matches
+        if keep.get("url") != url or keep.get("type") != "module":
+            await res.async_update_item(keep["id"], {"res_type": "module", "url": url})
+        for item in extra:
+            await res.async_delete_item(item["id"])
+        return
     await res.async_create_item({"res_type": "module", "url": url})
 
 
-def async_register_resource(hass: HomeAssistant, base: str, url: str) -> None:
+def async_register_resource(hass: HomeAssistant, base: str, url: str, also: tuple[str, ...] = ()) -> None:
     async def run(_=None) -> None:
         try:
-            await _ensure(hass, base, url)
+            await _ensure(hass, base, url, also)
         except Exception:  # never block setup over this
             _LOGGER.exception("Could not register dashboard resource %s", base)
 

@@ -121,3 +121,20 @@ async def test_dashboard_resource(hass, hass_ws_client):
     r = await ws.receive_json()
     urls = [x["url"] for x in r["result"] if "sentinel-controller-loader.js" in x["url"]]
     assert len(urls) == 1 and "?v=0." in urls[0], r
+
+
+async def test_dashboard_resource_replaces_stale_copies(hass, hass_ws_client):
+    assert await async_setup_component(hass, "lovelace", {})
+    ws = await hass_ws_client(hass)
+    for i, u in enumerate(["/local/sentinel-controller-card.js", "/sentinel_controller_static/sentinel-controller-loader.js"]):
+        await ws.send_json({"id": i + 1, "type": "lovelace/resources/create", "res_type": "module", "url": u})
+        assert (await ws.receive_json())["success"]
+    entry = MockConfigEntry(domain=DOMAIN, data={}, title="Sentinel Controller")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_start()
+    await hass.async_block_till_done()
+    await ws.send_json({"id": 9, "type": "lovelace/resources"})
+    r = await ws.receive_json()
+    urls = [x["url"] for x in r["result"]]
+    assert len(urls) == 1 and urls[0].startswith("/sentinel_controller_static/sentinel-controller-loader.js?v=0.2.10-"), urls

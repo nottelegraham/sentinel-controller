@@ -55,7 +55,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     add_extra_js_url(hass, loader)
     add_extra_js_url(hass, loader, es5=True)
     # Phone apps cache the start page; dashboard resources are always fetched fresh.
-    async_register_resource(hass, f"{STATIC_URL}/sentinel-controller-loader.js", loader)
+    async_register_resource(hass, f"{STATIC_URL}/sentinel-controller-loader.js", loader,
+                            also=("sentinel-controller-card.js",))
     sc_ws.async_register(hass)
 
     async def handle(call: ServiceCall) -> None:
