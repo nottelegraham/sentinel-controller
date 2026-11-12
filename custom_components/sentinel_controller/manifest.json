@@ -4,6 +4,7 @@
   "codeowners": ["@nottelegraham"],
   "config_flow": true,
   "dependencies": ["frontend", "http", "websocket_api"],
+  "after_dependencies": ["lovelace"],
   "documentation": "https://github.com/nottelegraham/sentinel-controller",
   "integration_type": "service",
   "iot_class": "calculated",
