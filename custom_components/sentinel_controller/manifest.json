@@ -1,10 +1,18 @@
 {
   "domain": "sentinel_controller",
   "name": "Sentinel Controller",
-  "codeowners": ["@nottelegraham"],
+  "after_dependencies": [
+    "lovelace"
+  ],
+  "codeowners": [
+    "@nottelegraham"
+  ],
   "config_flow": true,
-  "dependencies": ["frontend", "http", "websocket_api"],
-  "after_dependencies": ["lovelace"],
+  "dependencies": [
+    "frontend",
+    "http",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/nottelegraham/sentinel-controller",
   "integration_type": "service",
   "iot_class": "calculated",
