@@ -2,7 +2,7 @@
 DOMAIN = "sentinel_controller"
 NAME = "Sentinel Controller"
 STATIC_URL = "/sentinel_controller_static"
-CARD_VERSION = "0.2.16"
+CARD_VERSION = "0.2.17"
 TICK_SECONDS = 2
 RESEND_SECONDS = 15
 SIGNAL_UPDATE = "sentinel_controller_update"

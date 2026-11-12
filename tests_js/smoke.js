@@ -121,6 +121,11 @@ const sleep = (t = 10) => new Promise((r) => setTimeout(r, t));
   q('[data-tab="outlets"]').click(); await sleep();
   if (q(".page").textContent.includes("USB light")) errs.push("unticked outlet still shown");
   q('[data-tab="setup"]').click(); await sleep();
+  const on1 = q('input[data-oname="switch.hydros_control_x2_100l_heat"]');
+  if (!on1) errs.push("no outlet name box"); else { on1.value = "Sump heater"; on1.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(); q('[data-act="form_save"]').click(); await sleep(30);
+    if ((fx.config.outlet_names || {})["switch.hydros_control_x2_100l_heat"] !== "Sump heater") errs.push("outlet name not saved " + JSON.stringify(fx.config.outlet_names));
+    q('[data-tab="outlets"]').click(); await sleep(); if (!q(".page").textContent.includes("Sump heater")) errs.push("outlet name not shown");
+    q('[data-tab="setup"]').click(); await sleep(); }
   const cc = q('input[data-ctrl="d3"]'); if (!cc || !cc.checked) errs.push("HYDROS not pre-selected"); else { cc.checked = false; cc.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(); q('[data-act="form_save"]').click(); await sleep(30);
     const cs = calls.filter((c) => c.section === "controllers").pop(); if (!cs || cs.value.some((c) => c.device_id === "d3") || !cs.value.some((c) => c.device_id === "d2")) errs.push("controllers save wrong " + JSON.stringify(cs && cs.value)); }
   // dosers tab
