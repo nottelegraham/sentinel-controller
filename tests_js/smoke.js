@@ -20,15 +20,18 @@ const states = { "switch.kp303_1": { state: "off", attributes: { friendly_name: 
   "sensor.ghl_doser_connection": { state: "Connected", attributes: {} },
   "binary_sensor.ghl_doser_dosing_paused": { state: "off", attributes: {} },
   "binary_sensor.doser_pump_1_dosing": { state: "on", attributes: {} },
-  "switch.hydros_control_x2_child_lock": { state: "off", attributes: { friendly_name: "Child lock" } } };
+  "switch.hydros_control_x2_child_lock": { state: "off", attributes: { friendly_name: "Child lock" } },
+  "switch.dash_sentry_mode": { state: "off", attributes: { friendly_name: "Dash Sentry mode" } },
+  "switch.hydros_control_x2_usb_light": { state: "on", attributes: { friendly_name: "USB light" } } };
 const hass = { states, services: { notify: { pushover: {} } },
   callWS: async (m) => { calls.push(m);
     if (m.type === "sentinel_controller/get") return fx;
     if (m.type === "config/entity_registry/list") return [{ entity_id: "switch.kp303_1", device_id: "d1", platform: "tplink" }, { entity_id: "sensor.t", device_id: "d2", platform: "mqtt" },
       { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_1", device_id: "d2", platform: "mqtt" }, { entity_id: "binary_sensor.main_reef_ghl_im100_outlet_2", device_id: "d2", platform: "mqtt" },
-      { entity_id: "switch.hydros_control_x2_100l_heat", device_id: "d3", platform: "mqtt" }, { entity_id: "switch.hydros_control_x2_child_lock", device_id: "d3", platform: "mqtt", entity_category: "config" },
+      { entity_id: "switch.hydros_control_x2_100l_heat", device_id: "d3", platform: "mqtt" }, { entity_id: "switch.hydros_control_x2_usb_light", device_id: "d3", platform: "mqtt" },
+      { entity_id: "switch.dash_sentry_mode", device_id: "d5", platform: "tesla_fleet" }, { entity_id: "switch.hydros_control_x2_child_lock", device_id: "d3", platform: "mqtt", entity_category: "config" },
       ...["sensor.ghl_doser_calcium_volume", "sensor.ghl_doser_calcium_state", "sensor.ghl_doser_pump_1_calcium_volume_ml", "sensor.ghl_doser_naoh_volume", "sensor.ghl_doser_pump_2_naoh_volume_ml", "sensor.ghl_doser_connection", "binary_sensor.ghl_doser_dosing_paused"].map((e) => ({ entity_id: e, device_id: "d4", platform: "mqtt" }))];
-    if (m.type === "config/device_registry/list") return [{ id: "d1", name: "Kasa KP303" }, { id: "d2", name: "Main Reef GHL IM100" }, { id: "d3", name: "HYDROS Control X2" }, { id: "d4", name: "GHL Doser" }];
+    if (m.type === "config/device_registry/list") return [{ id: "d1", name: "Kasa KP303" }, { id: "d2", name: "Main Reef GHL IM100" }, { id: "d3", name: "HYDROS Control X2" }, { id: "d4", name: "GHL Doser" }, { id: "d5", name: "Dash", model: "Model 3", manufacturer: "Tesla" }];
     if (m.type === "sentinel_controller/preview") return { out: true, reason: "temperature" };
     if (m.type === "sentinel_controller/save") { fx.config[m.section] = m.value; return { config: fx.config, status: fx.status }; }
     return { config: fx.config, status: fx.status }; },
@@ -104,6 +107,19 @@ const sleep = (t = 10) => new Promise((r) => setTimeout(r, t));
   if (!ad) errs.push("no Control with Sentinel button for HYDROS"); else { ad.click(); await sleep(30); if (el.drawer?.draft.entity !== "switch.hydros_control_x2_100l_heat") errs.push("adopt did not prefill"); el.drawer.dirty = false; await el._closeDrawer(); }
   if (q('[data-act="adopt"][data-e^="binary_sensor"]')) errs.push("read-only outlet offered for control");
   // setup: controllers chooser saves an explicit list
+  q('[data-tab="setup"]').click(); await sleep();
+  const stxt = q(".page").textContent;
+  if (!stxt.includes("Outlet sources") || stxt.includes("Controllers")) errs.push("setup section not renamed");
+  if (q('input[data-ctrl="d5"]')) errs.push("car offered as an outlet source");
+  if (!q('input[data-ctrl="d1"]')) errs.push("Kasa strip not offered");
+  q('[data-act="other_src"]').click(); await sleep();
+  if (!q('input[data-ctrl="d5"]')) errs.push("show other devices did not reveal the car");
+  const usb = q('input[data-ctrlout="switch.hydros_control_x2_usb_light"]');
+  if (!usb) errs.push("no per-outlet tick boxes"); else { usb.checked = false; usb.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(); q('[data-act="form_save"]').click(); await sleep(30);
+    const cs = calls.filter((c) => c.section === "controllers").pop(); const h = cs && cs.value.find((c) => c.device_id === "d3");
+    if (!h || JSON.stringify(h.outlets) !== JSON.stringify(["switch.hydros_control_x2_100l_heat"])) errs.push("per-outlet save wrong " + JSON.stringify(cs && cs.value)); }
+  q('[data-tab="outlets"]').click(); await sleep();
+  if (q(".page").textContent.includes("USB light")) errs.push("unticked outlet still shown");
   q('[data-tab="setup"]').click(); await sleep();
   const cc = q('input[data-ctrl="d3"]'); if (!cc || !cc.checked) errs.push("HYDROS not pre-selected"); else { cc.checked = false; cc.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(); q('[data-act="form_save"]').click(); await sleep(30);
     const cs = calls.filter((c) => c.section === "controllers").pop(); if (!cs || cs.value.some((c) => c.device_id === "d3") || !cs.value.some((c) => c.device_id === "d2")) errs.push("controllers save wrong " + JSON.stringify(cs && cs.value)); }
