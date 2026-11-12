@@ -137,7 +137,8 @@ def default_config() -> dict[str, Any]:
         "data_timeout_min": 0,
         "data_source": {"entity": "", "ok_states": "Connected"},
         "controllers": [],  # [{"device_id", "name", "outlets"?}]; empty = auto-detect in the card
-        "source_kinds": {},  # device_id -> "controller" | "strip" | "other": the user's fix to the card's guess
+        "source_kinds": {},
+        "doser_sections": {},  # device_id -> {pump number: section name} for the dosing cards  # device_id -> "controller" | "strip" | "other": the user's fix to the card's guess
     }
 
 

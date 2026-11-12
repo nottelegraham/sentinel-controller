@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 SWITCHABLE = {"switch", "light", "fan", "input_boolean", "siren", "humidifier", "select"}
 CONFIG_SECTIONS = {
     "probes", "level_sensors", "timers", "illumination", "light_reduction", "feed_pauses", "maintenance",
-    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min", "data_source", "controllers", "source_kinds",
+    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min", "data_source", "controllers", "source_kinds", "doser_sections",
 }
 
 

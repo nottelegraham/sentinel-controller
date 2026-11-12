@@ -69,5 +69,14 @@ if (f.srcKind("relay") !== "strip" || f.srcKind("def") !== "controller") errs.pu
 if (c.ctrlShown({ device_id: "tu" }).length !== 2) errs.push("all outlets not shown without a list");
 if (c.ctrlShown({ device_id: "tu", outlets: ["switch.sump_strip_socket_2"] }).join() !== "switch.sump_strip_socket_2") errs.push("outlet list not applied");
 
-console.log(errs.length ? "ERRORS:\n" + errs.join("\n") : "SOURCES OK");
+// mL/day = every drop in the container over 24 h, refills ignored, converted from fl. oz.
+(async () => {
+  const d = card(); d._hass.states["sensor.x_pump_1_ca_volume_ml"] = { state: "30", attributes: { unit_of_measurement: "fl. oz." } };
+  d._hass.callWS = async () => ({ "sensor.x_pump_1_ca_volume_ml": [{ s: "10" }, { s: "9" }, { s: "8.5" }, { s: "20" }, { s: "19.5" }] });
+  if (d.doseDay("sensor.x_pump_1_ca_volume_ml") !== null) errs.push("dose value before history arrives");
+  await new Promise((r) => setTimeout(r, 20));
+  const v = d.doseDay("sensor.x_pump_1_ca_volume_ml");
+  if (Math.abs(v - 2 * 29.5735) > 0.01) errs.push("dose per day wrong: " + v);
+  console.log(errs.length ? "ERRORS:\n" + errs.join("\n") : "SOURCES OK");
 process.exit(errs.length ? 1 : 0);
+})();

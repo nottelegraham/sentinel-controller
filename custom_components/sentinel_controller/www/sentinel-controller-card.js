@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.12";
+const VERSION = "0.2.13";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -60,6 +60,8 @@ const OPS = {
   delayed_on: { label: "Delayed ON", desc: "Turns on only after the input has been on for the duration; turns off at once." },
   delayed_off: { label: "Delayed OFF", desc: "Turns on at once; stays on for the duration after the input goes off." },
 };
+// Container fill colors by pump number (same as the Reef Ecosystem dashboard)
+const PUMP_COLORS = ["#4f8fc9", "#7a6bc4", "#3aa6a0", "#c46b9a", "#8a7a5c", "#5aa5dc", "#7a8fd0", "#c56b5a"];
 // Integrations whose devices are reef controllers (outputs = outlets)
 const CTRL_PLATFORMS = ["apex", "apex_fusion", "neptune_apex", "reef_pi", "hydros", "ghl", "profilux"];
 // Reef controllers recognised by model, maker or name (gear that arrives through MQTT bridges)
@@ -171,29 +173,61 @@ class SentinelControllerCard extends HTMLElement {
   pumpCard(d, p) {
     return `<div class="card pump" data-live="pump:${esc(d.device_id)}:${p.n}"></div>`;
   }
+  // Doser heads grouped into sections: the user's section name per pump, else the doser's name.
+  // Consecutive pumps with the same section share one heading (e.g. Doser 2.1 = 1–4, Maxi EXT = 5–6).
+  doserGroups(d) {
+    const names = (this.cfg.doser_sections || {})[d.device_id] || {}; const out = [];
+    for (const p of d.pumps) {
+      const nm = String(names[p.n] || "").trim() || d.name; const last = out[out.length - 1];
+      if (last && last.name === nm) last.pumps.push(p); else out.push({ name: nm, pumps: [p] });
+    }
+    return out;
+  }
+  doserSections(ds) {
+    const groups = ds.flatMap((d) => this.doserGroups(d).map((g, i) => ({ ...g, d, first: i === 0 })));
+    return `<div class="dgroups">${groups.map((g) => `<div class="dgroup" style="flex:${g.pumps.length} 1 ${g.pumps.length * 200}px">
+      ${this.sec(`Dosing · ${g.name}`, g.first ? `<span class="hdrchips" data-live="doserhead:${esc(g.d.device_id)}"></span>` : "")}
+      <div class="dgrid">${g.pumps.map((p) => this.pumpCard(g.d, p)).join("")}</div></div>`).join("")}</div>`;
+  }
+  // mL dosed in the last 24 h: the sum of every drop in the container volume (refills ignored), from
+  // Home Assistant history, refreshed every 15 minutes.
+  doseDay(e) {
+    const C = this._dose || (this._dose = {}); const c = C[e] || {};
+    if (!c.busy && (!c.t || Date.now() - c.t > 900000) && this._hass?.callWS) {
+      C[e] = { ...c, busy: true };
+      const u = this._hass.states[e]?.attributes?.unit_of_measurement || "mL";
+      const f = /oz/i.test(u) ? 29.5735 : /^l$/i.test(u) ? 1000 : /gal/i.test(u) ? 3785.41 : 1;
+      const end = new Date(), start = new Date(end - 864e5);
+      Promise.resolve(this._hass.callWS({ type: "history/history_during_period", start_time: start.toISOString(), end_time: end.toISOString(), entity_ids: [e], minimal_response: true, no_attributes: true }))
+        .then((r) => { const rows = ((r || {})[e] || []).map((x) => parseFloat(x.s) * f).filter((x) => !isNaN(x)); let d = 0;
+          for (let i = 1; i < rows.length; i++) { const x = rows[i] - rows[i - 1]; if (x < 0) d -= x; }
+          C[e] = { t: Date.now(), v: rows.length > 1 ? d : null }; })
+        .catch(() => { C[e] = { t: Date.now(), v: null }; });
+    }
+    return (C[e] || {}).v ?? null;
+  }
   _pumpLive(devId, n) {
     const d = this.dosers().find((x) => x.device_id === devId); const p = d?.pumps.find((x) => x.n === Number(n)); if (!p) return "";
     const S = this._hass.states;
     const pct = parseFloat(S[p.pct]?.state);
     const raw = parseFloat(S[p.vol]?.state), unit = S[p.vol]?.attributes?.unit_of_measurement || "";
-    const ml = isNaN(raw) ? null : /oz/i.test(unit) ? raw * 29.5735 : /^l$/i.test(unit) ? raw * 1000 : raw;
+    const ml = isNaN(raw) ? null : /oz/i.test(unit) ? raw * 29.5735 : /^l$/i.test(unit) ? raw * 1000 : /gal/i.test(unit) ? raw * 3785.41 : raw;
     const vol = ml == null ? "—" : ml >= 1000 ? `${(ml / 1000).toFixed(2)} L` : `${Math.round(ml)} mL`;
     const lvl = isNaN(pct) ? 0 : Math.max(0, Math.min(100, pct));
-    const colors = ["#4f8fc9", "#e0a030", "#4fa39b", "#b06fae", "#8a7a5c", "#3fa0d8", "#7a8fd0", "#c56b5a"];
-    const fill = isNaN(pct) ? "#c9d4de" : pct < 15 ? "#d9312b" : pct < 30 ? "#e8a317" : colors[(p.n - 1) % colors.length];
-    const st = S[p.state]?.state; const dosing = p.dosing && S[p.dosing]?.state === "on";
-    const chips = [dosing ? `<span class="chip info">${this.icon("mdi:water-pump")}Dosing</span>` : "",
-      st && st !== "Normal" ? `<span class="chip warn">${esc(st)}</span>` : "",
-      !isNaN(pct) && pct < 15 ? `<span class="chip bad">Refill</span>` : !isNaN(pct) && pct < 30 ? `<span class="chip warn">Low</span>` : ""].join("");
+    const fill = isNaN(pct) ? "#c9d4de" : pct < 15 ? "#d9312b" : pct < 30 ? "#e8a317" : PUMP_COLORS[(p.n - 1) % PUMP_COLORS.length];
+    const day = this.doseDay(p.vol);
+    const dayTxt = day == null ? "— /day" : day >= 1000 ? `${(day / 1000).toFixed(2)} L/day` : `${Math.round(day)} mL/day`;
+    const st = S[p.state]?.state; const ok = st === "Normal";
+    const mark = !p.state ? "" : ok ? `<span class="pdot ok" title="Normal">●</span>` : `<span class="pdot bad">▲ ${esc(st || "unknown")}</span>`;
     return `<div class="tank" aria-hidden="true"><i style="height:${lvl}%;background:${fill}"></i></div>
-      <div class="pinfo"><span class="cap">Pump ${p.n}</span><b>${esc(this.pumpName(d, p))}</b>
-      <div class="pvol"><span class="big sm">${isNaN(pct) ? "—" : Math.round(pct) + "%"}</span><span class="muted">${vol}</span></div><div class="chips">${chips}</div></div>`;
+      <div class="pinfo"><div class="phead"><span>PUMP ${p.n}</span>${mark}</div><b class="pname">${esc(this.pumpName(d, p))}</b>
+      <div class="pline"><b>${isNaN(pct) ? "--" : Math.round(pct) + "%"}</b> · ${vol}</div><div class="pday">${dayTxt}</div></div>`;
   }
   doserHead(d) {
     const S = this._hass.states;
     const conn = S[d.conn]?.state, wd = S[d.wd]?.state, paused = S[d.paused]?.state === "on";
     const ok = (!d.conn || conn === "Connected") && (!d.wd || wd === "OK");
-    return `${ok ? `<span class="chip ok">Online</span>` : `<span class="chip bad">${esc(conn || wd || "Offline")}</span>`}${paused ? `<span class="chip warn">Dosing paused</span>` : ""}`;
+    return `${ok ? "" : `<span class="chip bad">${esc(conn || wd || "Offline")}</span>`}${paused ? `<span class="chip warn">Dosing paused</span>` : ""}`;
   }
 
   shortName(e, dev) { const n = this.ename(e); return n.toLowerCase().startsWith(dev.toLowerCase() + " ") ? n.slice(dev.length + 1) : n; }
@@ -935,7 +969,7 @@ class SentinelControllerCard extends HTMLElement {
       ${this.sec("Outlets", this.btn("goto", "Manage", { to: "outlets" }, "link"))}
       <div class="grid g3">${outs.map((c) => this._outletCard(c)).join("") || this.empty("mdi:power-socket-us", "No outlets yet", "Pick any switch or smart plug and choose what it does.", nextCh ? this.btn("goto", "Add an outlet", { to: "outlets", kind: "channel", n: nextCh }, "primary") : "")}</div>
       ${this.controllers().map((c) => this.ctrlSection(c)).join("")}
-      ${this.dosers().map((d) => `${this.sec(d.name, `<span class="hdrchips" data-live="doserhead:${esc(d.device_id)}"></span>`)}<div class="grid g4 dense">${d.pumps.map((p) => this.pumpCard(d, p)).join("")}</div>`).join("")}
+      ${this.dosers().length ? this.doserSections(this.dosers()) : ""}
       ${water ? `${this.sec("Water", this.btn("goto", "Manage", { to: "water" }, "link"))}<div class="grid g3">${water}</div>` : ""}`;
   }
   _outletCard(c) {
@@ -1006,9 +1040,8 @@ class SentinelControllerCard extends HTMLElement {
   p_dosers() {
     const ds = this.dosers();
     if (!ds.length) return this.empty("mdi:beaker-outline", "No dosers found", "Dosers appear here automatically when their pumps are in Home Assistant (for example through your GHL bridge).");
-    return ds.map((d) => `${this.sec(d.name, `<span class="hdrchips" data-live="doserhead:${esc(d.device_id)}"></span>`)}
-      <div class="grid g3">${d.pumps.map((p) => this.pumpCard(d, p)).join("")}</div>`).join("")
-      + `<p class="hint">Container levels and remaining volume come from the doser. Dosing schedules and calibration stay on the doser itself. Colors: red under 15 %, amber under 30 %.</p>`;
+    return this.doserSections(ds)
+      + `<p class="hint">Container level and volume come from the doser; mL/day is what left each container in the last 24 hours. Colors: red under 15 %, amber under 30 %. Section names are set on the Setup tab. Dosing schedules and calibration stay on the doser.</p>`;
   }
   p_logic() {
     const gs = this.cfg.logic.filter((g) => this.gateUsed(g)), ng = this.nextFree("logic", (g) => this.gateUsed(g));
@@ -1047,9 +1080,10 @@ class SentinelControllerCard extends HTMLElement {
     return `<div class="lbl">${esc(title)}</div><div class="srcs">${rows}</div>`;
   }
   p_setup() {
-    const F = this.form("setup", ["power_cut", "data_source", "data_timeout_min", "controllers", "source_kinds"]);
+    const F = this.form("setup", ["power_cut", "data_source", "data_timeout_min", "controllers", "source_kinds", "doser_sections"]);
     if (!F.controllers.length && !this.forms.setup.ctrlInit) { F.controllers = this.controllers().map((c) => ({ ...c })); this.forms.setup.ctrlInit = true; }
     if (!F.source_kinds) F.source_kinds = {};  // card newer than the saved config
+    if (!F.doser_sections) F.doser_sections = {};
     const chosen = new Set(F.controllers.map((c) => c.device_id));
     const cands = this.ctrlCandidates(), others = cands.filter((c) => c.kind === "other");
     const pc = F.power_cut, ds = F.data_source;
@@ -1068,6 +1102,9 @@ class SentinelControllerCard extends HTMLElement {
           ? `${this.srcGroup("Other devices with switches", others, chosen, F)}${this.showOtherSrc ? this.btn("other_src", "Hide other devices", {}, "link") : ""}`
           : this.btn("other_src", `Show other devices with switches (${others.length})`, {}, "link")) : ""}
         <p class="hint">Other devices are things like cars, appliances, power stations, pumps and wall light switches: they have switches but aren't outlets. Device in the wrong group? ${this.btn("edit_kinds", this.editKinds ? "Done" : "Fix groups", {}, "link")}</p></div>
+      ${this.dosers().length ? `${this.sec("Dosing heads")}<div class="card pad form">
+        <p class="hint">Section each pump is shown under on the Overview and Dosers tabs. Pumps next to each other with the same section share a heading — for example pumps 1–4 "Doser 2.1" and pumps 5–6 "Doser Maxi EXT". Leave empty to use the doser's name.</p>
+        ${this.dosers().map((d) => d.pumps.map((p) => this.field(`${d.name} · Pump ${p.n} · ${this.pumpName(d, p)}`, this.ctl("text", this.f("setup", `doser_sections.${d.device_id}.${p.n}`), ((F.doser_sections || {})[d.device_id] || {})[p.n] || "", { ph: d.name }))).join("")).join("")}</div>` : ""}
       ${this.sec("Data")}<div class="card pad form">
         ${this.field("Default status sensor", this.ctl("select", this.f("setup", "data_source.entity"), ds.entity, { options: ents(["sensor", "binary_sensor"]) }), "Probes without their own status sensor use this one")}
         ${this.field("OK when state is", this.ctl("text", this.f("setup", "data_source.ok_states"), ds.ok_states, { ph: "Connected" }))}
@@ -1182,13 +1219,15 @@ details .fld{border-top:1px solid var(--offb)}details .picker{margin:6px 0}
 .days{display:flex;gap:6px;flex-wrap:wrap}.day{border:1px solid var(--bd);background:var(--card);border-radius:18px;padding:7px 12px;cursor:pointer;font-weight:600;color:var(--sec)}.day.on{background:var(--ac);color:#fff;border-color:var(--ac)}
 .presets{display:flex;gap:14px}.gin{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0}
 .checks{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}.srcs{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}.src{display:flex;flex-direction:column;gap:6px;align-items:flex-start}.srow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.kindsel{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx)}.checks.sub{margin:0 0 4px 28px}.checks.sub .chk{background:var(--card);border:1px solid var(--bd);font-size:13px;padding:4px 8px}.chk{display:flex;align-items:center;gap:6px;background:var(--offb);border-radius:8px;padding:6px 10px;cursor:pointer}
-.pump{display:flex;gap:14px;padding:12px 14px;align-items:stretch}
-.tank{width:34px;min-height:78px;border:2px solid #c3d1dd;border-top-width:1px;border-radius:4px 4px 8px 8px;position:relative;overflow:hidden;background:#f4f7fa;flex:none}
-.tank i{position:absolute;left:0;right:0;bottom:0;transition:height .6s}
-.pinfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}.pinfo b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pvol{display:flex;align-items:baseline;gap:8px}.big.sm{font-size:24px}
+.pump{display:flex;gap:10px;padding:14px;align-items:center}
+.tank{width:40px;height:78px;border:2px solid #b9c7d4;border-top-width:5px;border-radius:3px 3px 7px 7px;position:relative;overflow:hidden;background:#f4f7fa;flex:none}
+.tank i{position:absolute;left:0;right:0;bottom:0;opacity:.85;transition:height .6s}
+.pinfo{flex:1;min-width:0}.phead{display:flex;justify-content:space-between;gap:6px;font-size:10px;font-weight:700;color:#8aa0b2}
+.pdot.ok{color:#2fa84f}.pdot.bad{color:#d9312b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pname{display:block;font-weight:700;color:#12324a;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pline{font-size:13px;color:#6b8296}.pline b{color:#12324a}.pday{font-size:11px;color:#6b8296;margin-top:2px}
+.dgroups{display:flex;flex-wrap:wrap;gap:0 16px}.dgroup{min-width:0}.dgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
 .hdrchips{display:inline-flex;gap:6px;text-transform:none;letter-spacing:0}
-.dense .pump{padding:10px 12px}.dense .tank{min-height:64px;width:28px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;background:var(--tx);color:#fff;padding:10px 18px;border-radius:10px;z-index:20;transition:.25s;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:90vw}.toast.in{opacity:1;transform:translate(-50%,0)}.toast.bad{background:var(--bad)}
 @media (max-width:700px){.root{padding:8px}.g2,.g3,.g4{grid-template-columns:1fr}.tab span{display:none}.tab.on span{display:inline}.fld{flex-wrap:wrap}.fc{max-width:100%;width:100%;justify-content:flex-start}input[type=text]{width:100%}.ftiles{grid-template-columns:1fr 1fr}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
