@@ -48,7 +48,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(CardVersionView(f"{CARD_VERSION}-{digest}"))
     # Versioned loader URL: every install/restart gets a fresh loader; the loader itself also asks
     # for the current build, so even a stale cached page reaches the installed card.
-    add_extra_js_url(hass, f"{STATIC_URL}/sentinel-controller-loader.js?v={CARD_VERSION}-{digest}")
+    loader = f"{STATIC_URL}/sentinel-controller-loader.js?v={CARD_VERSION}-{digest}"
+    # Modern frontend (iOS 18.4+, current desktop browsers) loads extra modules;
+    # older iPhones/iPads get the legacy frontend, which only loads es5 scripts.
+    add_extra_js_url(hass, loader)
+    add_extra_js_url(hass, loader, es5=True)
     sc_ws.async_register(hass)
 
     async def handle(call: ServiceCall) -> None:

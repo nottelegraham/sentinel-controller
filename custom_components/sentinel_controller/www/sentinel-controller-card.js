@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.7";
+const VERSION = "0.2.8";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
