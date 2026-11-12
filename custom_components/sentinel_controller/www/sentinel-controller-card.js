@@ -1,7 +1,7 @@
 /* Sentinel Controller card — ProfiLux-4-style control scheme for Home Assistant.
  * Menu and settings follow the GHL "ProfiLux 4 / 4e Resource Guide (GHL Connect edition)". */
 (() => {
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -34,10 +34,10 @@ const LEVEL_LABEL = {
 };
 const OP_LABEL = { and: "AND", or: "OR", delayed_on: "Delayed ON", delayed_off: "Delayed OFF" };
 const PAGE_SECTIONS = {
-  sensors: ["probes", "light_reduction", "data_timeout_min"], channels: ["channels"], timers: ["timers"],
+  sensors: ["probes", "light_reduction"], channels: ["channels"], timers: ["timers"],
   illumination: ["illumination", "light_reduction"], feed: ["feed_pauses"], maintenance: ["maintenance"],
   level: ["level_sensors", "level_circuits"], logic: ["logic"], reminders: ["reminders"], notify: ["notify"],
-  system: ["power_cut", "data_timeout_min"],
+  system: ["power_cut", "data_timeout_min", "data_source"],
 };
 
 class SentinelControllerCard extends HTMLElement {
@@ -361,7 +361,7 @@ class SentinelControllerCard extends HTMLElement {
       <h3>Temperature-dependent light reduction</h3><div class="form">
       ${this.row("Temperature probe", this.sel_("light_reduction.probe", [["", "— off —"], ...tprobes.map((p) => [p.id, p.name || p.id])], lr.probe))}
       ${this.row("Shut-off limit (above nominal)", this.num("light_reduction.limit", lr.limit, "0.1", 0), "Illumination channels with light reduction enabled turn OFF for the rest of the day once this is reached")}</div>
-      <h3>Data timeout</h3><div class="form">${this.row("Treat sensor data older than (min) as missing", this.num("data_timeout_min", this.cfg.data_timeout_min, "1", 0), "Missing data puts outlets in their fallback state")}</div>`;
+      <p class="hint">Data source and age rules are under System.</p>`;
   }
 
   p_channels() {
@@ -559,7 +559,10 @@ class SentinelControllerCard extends HTMLElement {
       ${this.row("Power is cut when", this.sel_("power_cut.mode", [["below", "Value is below"], ["state", "State equals"]], pc.mode, 'data-rerender="1"'))}
       ${pc.mode === "state" ? this.row("State", this.txt("power_cut.state", pc.state, "on")) : this.row("Threshold", this.num("power_cut.threshold", pc.threshold, "any"))}
       ${this.row("Now", this.pill(this.st(["power_cut"]), "POWER CUT", "OK"))}</div>
-      <h3>Data</h3><div class="form">${this.row("Sensor data timeout (min)", this.num("data_timeout_min", this.cfg.data_timeout_min, "1", 0))}</div>
+      <h3>Data source</h3><div class="form">
+      ${this.row("Source status sensor", this.entSel("data_source.entity", ["sensor", "binary_sensor"], (this.cfg.data_source || {}).entity), "e.g. your GHL bridge connection sensor. Probe data counts as missing unless this reads OK")}
+      ${this.row("OK when state is", this.txt("data_source.ok_states", (this.cfg.data_source || {}).ok_states, "Connected"), "Comma separated")}
+      ${this.row("Also treat readings older than (min) as missing", this.num("data_timeout_min", this.cfg.data_timeout_min, "1", 0), "0 = off. Leave off if your sensors only report when the value changes")}</div>
       <p class="hint">Settings are stored in Home Assistant and included in Home Assistant backups. Probe calibration, firmware and Wi-Fi settings stay on the GHL controller.</p>`;
   }
 }
@@ -607,5 +610,5 @@ input[type=number]{width:100px}select{min-width:180px}input[type=color]{width:60
 if (!customElements.get("sentinel-controller-card")) customElements.define("sentinel-controller-card", SentinelControllerCard);
 window.customCards = window.customCards || [];
 if (!window.customCards.find((c) => c.type === "sentinel-controller-card"))
-  window.customCards.push({ type: "sentinel-controller-card", name: "Sentinel Controller", description: "ProfiLux-4-style controller for Home Assistant" });
+  window.customCards.push({ type: "sentinel-controller-card", name: "Sentinel Controller", description: "Reef controller for Home Assistant" });
 })();

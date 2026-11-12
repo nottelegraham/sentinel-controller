@@ -68,6 +68,7 @@ def test_alarm_deviation_and_deactivate_control():
 def test_stale_or_missing_probe_uses_fallback():
     c = ctl(probes=[dict(TEMP)])
     ch(c, 1, fn={"type": "temperature", "param": "t1", "mode": "heater"}, fallback="off")
+    c.config["data_timeout_min"] = 5
     s = c.tick(T0, {"sensor.temp": Input("76.0", T0 - timedelta(minutes=10))})
     assert s["channels"][1]["out"] is False and s["channels"][1]["reason"].startswith("fallback")
     assert any(a["key"] == "probe_t1_fault" for a in s["alarms"])
@@ -287,3 +288,14 @@ def test_reminders():
     c.ack_reminder(1, T0.date())
     assert not any(a.get("reminder") == 1 for a in run(c, T0, {})["alarms"])
     assert any(a.get("reminder") == 1 for a in run(c, T0 + timedelta(days=30), {})["alarms"])
+
+
+def test_steady_value_is_not_stale_by_default_and_source_check():
+    c = ctl(probes=[dict(TEMP)])
+    s = c.tick(T0, {"sensor.temp": Input("77.0", T0 - timedelta(hours=2))})
+    assert s["probes"]["t1"]["value"] == 77.0
+    c.config["data_source"] = {"entity": "sensor.bridge", "ok_states": "Connected"}
+    s = c.tick(T0, {"sensor.temp": Input("77.0", T0), "sensor.bridge": Input("Disconnected", T0)})
+    assert s["probes"]["t1"]["value"] is None
+    s = c.tick(T0, {"sensor.temp": Input("77.0", T0), "sensor.bridge": Input("Connected", T0)})
+    assert s["probes"]["t1"]["value"] == 77.0

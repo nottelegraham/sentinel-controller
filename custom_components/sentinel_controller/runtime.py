@@ -19,7 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 SWITCHABLE = {"switch", "light", "fan", "input_boolean", "siren", "humidifier"}
 CONFIG_SECTIONS = {
     "probes", "level_sensors", "timers", "illumination", "light_reduction", "feed_pauses", "maintenance",
-    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min",
+    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min", "data_source",
 }
 
 
@@ -93,6 +93,7 @@ class Runtime:
         ents = {p.get("entity") for p in cfg["probes"]}
         ents |= {s.get("entity") for s in cfg["level_sensors"]}
         ents.add((cfg.get("power_cut") or {}).get("entity"))
+        ents.add((cfg.get("data_source") or {}).get("entity"))
         return {e for e in ents if e}
 
     def _inputs(self) -> dict[str, Input]:
