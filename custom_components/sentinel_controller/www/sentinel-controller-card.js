@@ -1,7 +1,7 @@
 /* Sentinel Controller card — ProfiLux-4-style control scheme for Home Assistant.
  * Menu and settings follow the GHL "ProfiLux 4 / 4e Resource Guide (GHL Connect edition)". */
 (() => {
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -287,7 +287,7 @@ class SentinelControllerCard extends HTMLElement {
     if (!this.cfg) { root.innerHTML = `${STYLE}<ha-card><div class="pad">Loading…</div></ha-card>`; return; }
     const alarms = this.st(["alarms"], []);
     const nav = MENU.map(([k, l, icon]) => `<div class="nav ${this.page === k ? "act" : ""}" data-nav="${k}"><ha-icon icon="${icon}"></ha-icon><span>${l}</span></div>`).join("");
-    const page = (this["p_" + this.page] || (() => ""))();
+    const fn = this["p_" + this.page]; const page = fn ? fn.call(this) : "";
     const focus = root.activeElement?.dataset?.bind;
     root.innerHTML = `${STYLE}<ha-card>
       <div class="head"><div class="title">Sentinel Controller<small>ProfiLux-4-style control · ${esc(VERSION)}</small></div>
