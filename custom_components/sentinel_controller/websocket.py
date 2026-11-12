@@ -9,7 +9,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .const import DOMAIN, SIGNAL_UPDATE
+from .const import CARD_VERSION, DOMAIN, SIGNAL_UPDATE
 from . import logic
 
 
@@ -55,7 +55,8 @@ def ws_get(hass, connection, msg):
     if not rt or not rt.ctl:
         connection.send_error(msg["id"], "not_loaded", "Sentinel Controller is not set up. Add it under Settings > Devices & services.")
         return
-    connection.send_result(msg["id"], {"config": rt.ctl.config, "status": _status_json(rt.status), "limits": _limits()})
+    connection.send_result(msg["id"], {"config": rt.ctl.config, "status": _status_json(rt.status), "limits": _limits(),
+                                       "version": CARD_VERSION})
 
 
 @websocket_api.require_admin

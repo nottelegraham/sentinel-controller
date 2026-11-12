@@ -16,6 +16,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.http import KEY_HASS
 
 from . import websocket as sc_ws
 from .const import CARD_VERSION, DOMAIN, STATIC_URL
@@ -46,7 +47,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "www"), False)])
     card = Path(__file__).parent / "www" / "sentinel-controller-card.js"
     digest = await hass.async_add_executor_job(lambda: hashlib.sha1(card.read_bytes()).hexdigest()[:10])
-    hass.http.register_view(CardVersionView(f"{CARD_VERSION}-{digest}"))
+    hass.http.register_view(CardVersionView(card))
     # Versioned loader URL: every install/restart gets a fresh loader; the loader itself also asks
     # for the current build, so even a stale cached page reaches the installed card.
     loader = f"{STATIC_URL}/sentinel-controller-loader.js?v={CARD_VERSION}-{digest}"
@@ -90,14 +91,21 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class CardVersionView(HomeAssistantView):
-    """Tells the loader which card build is installed (no caching)."""
+    """Tells the loader which card build is on disk right now (no caching).
+
+    The build id comes from the file itself on every request, so a card downloaded by HACS loads at
+    once — before Home Assistant is restarted — instead of the browser's cached copy of the old one.
+    """
 
     url = "/api/sentinel_controller/card_version"
     name = "api:sentinel_controller:card_version"
     requires_auth = False
 
-    def __init__(self, version: str) -> None:
-        self._version = version
+    def __init__(self, card: Path) -> None:
+        self._card = card
 
     async def get(self, request):
-        return web.json_response({"version": self._version}, headers={"Cache-Control": "no-store"})
+        hass = request.app[KEY_HASS]
+        digest = await hass.async_add_executor_job(lambda: hashlib.sha1(self._card.read_bytes()).hexdigest()[:10])
+        return web.json_response({"version": f"{CARD_VERSION}-{digest}", "running": CARD_VERSION},
+                                 headers={"Cache-Control": "no-store"})

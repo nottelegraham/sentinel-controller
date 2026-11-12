@@ -103,8 +103,8 @@ async def test_card_version_endpoint(hass, hass_client):
     client = await hass_client()
     r = await client.get("/api/sentinel_controller/card_version")
     assert r.status == 200 and r.headers.get("Cache-Control") == "no-store"
-    v = (await r.json())["version"]
-    assert "-" in v and len(v.split("-")[1]) == 10
+    j = await r.json(); v = j["version"]
+    assert "-" in v and len(v.split("-")[1]) == 10 and j["running"] == CARD_VERSION
     r = await client.get("/sentinel_controller_static/sentinel-controller-loader.js")
     assert r.status == 200 and "card_version" in await r.text()
     assert await hass.config_entries.async_unload(entry.entry_id)

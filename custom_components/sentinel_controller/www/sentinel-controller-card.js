@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.15";
+const VERSION = "0.2.16";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -93,7 +93,7 @@ class SentinelControllerCard extends HTMLElement {
     sr.addEventListener("keydown", (e) => { if (e.key === "Escape" && this.drawer) this._closeDrawer(); });
     try {
       const r = await this._hass.callWS({ type: "sentinel_controller/get" });
-      this.cfg = r.config; this.status = r.status; this.L = r.limits;
+      this.cfg = r.config; this.status = r.status; this.L = r.limits; this.running = r.version || "";
       try {
         const [ents, devs] = await Promise.all([this._hass.callWS({ type: "config/entity_registry/list" }), this._hass.callWS({ type: "config/device_registry/list" })]);
         const dn = {}; this.devInfo = {}; devs.forEach((d) => { dn[d.id] = d.name_by_user || d.name; this.devInfo[d.id] = { model: d.model || "", mfr: d.manufacturer || "" }; });
@@ -949,6 +949,7 @@ class SentinelControllerCard extends HTMLElement {
     sr.innerHTML = `${STYLE}<div class="root">
       <div class="hdr"><div class="ttl"><div class="ttop"><b>Sentinel Controller</b><small class="ver" title="Sentinel Controller version">v${VERSION}</small></div><span data-live="clock"></span></div>
         <button type="button" class="bell" data-tab="alerts" aria-label="Alerts" data-live="bell"></button></div>
+      ${this.running && this.running !== VERSION ? `<div class="banner warn">${this.icon("mdi:restart")}<span>Sentinel Controller ${esc(VERSION)} is installed, but Home Assistant is still running ${esc(this.running)}. Restart Home Assistant to finish the update.</span></div>` : ""}
       <nav class="tabs" aria-label="Sections">${tabs}</nav>
       <div class="page">${page}</div></div>`;
     if (drawer) sr.appendChild(drawer);
