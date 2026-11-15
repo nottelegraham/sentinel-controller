@@ -61,3 +61,6 @@ type: custom:sentinel-controller-card
 
 Smart plugs hold their last state if Home Assistant or Wi-Fi goes down. Set a heater's own
 thermostat 1–2 °F above the setpoint as a hardware backup.
+
+## License
+Free for personal, hobby and other noncommercial use under the [PolyForm Noncommercial License 1.0.0](LICENSE). Selling this software, devices built with it, or any part of it requires written permission from TelegrahamTested.
