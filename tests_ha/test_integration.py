@@ -174,3 +174,27 @@ async def test_drives_apex_style_select(hass, hass_ws_client):
     await hass.async_block_till_done()
     assert hass.states.get("select.apex_heater").state == "Off"
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_alk_advice_runs_when_ha_finishes_starting(hass, hass_ws_client):
+    """Integration loads while HA is still starting; the first advice must run at EVENT_HOMEASSISTANT_STARTED."""
+    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+    from homeassistant.core import CoreState
+    hass.set_state(CoreState.not_running)
+    entry = MockConfigEntry(domain=DOMAIN, data={}, title="Sentinel Controller")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "sentinel_controller/save", "section": "alk_advisor",
+                        "value": {"enabled": True, "dkh_entity": "sensor.dkh", "tank_volume": 100,
+                                  "naoh_entity": "sensor.naoh", "naoh_g_per_l": 36}})
+    r = await ws.receive_json(); assert r["success"], r
+    rt = hass.data[DOMAIN]["runtime"]
+    rt.advice = {}  # forget the run the save triggered; the startup hook must fill it
+    hass.states.async_set("sensor.dkh", "7.8", {"unit_of_measurement": "dKH"})
+    hass.states.async_set("sensor.naoh", "83.9", {"unit_of_measurement": "fl. oz."})
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    assert rt.advice.get("state"), rt.advice  # ran (no thread-safety error), produced advice

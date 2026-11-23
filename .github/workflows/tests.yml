@@ -16,3 +16,11 @@ jobs:
         with: {node-version: "22"}
       - run: npm install --no-save jsdom
       - run: node tests_js/sources_test.js custom_components/sentinel_controller/www/sentinel-controller-card.js
+  homeassistant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - run: pip install pytest-homeassistant-custom-component home-assistant-frontend
+      - run: touch custom_components/__init__.py && pytest -q -o asyncio_mode=auto tests_ha

@@ -1277,13 +1277,11 @@ Object.assign(SentinelControllerCard.prototype, {
     const dose = a.naoh_now == null ? "" : a.state === "raise" || a.state === "lower"
       ? `<div class="dose"><span class="muted">NaOH</span><b>${fmt(a.naoh_now, 0)}</b><span class="muted">→</span><b class="${head[0]}c">${fmt(a.naoh_new, 0)}</b><span class="muted">mL/day</span><span class="chip ${head[0]}">${a.change_pct >= 0 ? "+" : ""}${fmt(a.change_pct, 0)}%</span></div>`
       : `<div class="dose"><span class="muted">NaOH</span><b>${fmt(a.naoh_now, 0)}</b><span class="muted">mL/day</span></div>`;
-    const fl = a.fluoride ? `<div class="kv">${this.icon("mdi:flask-outline")}<span>Fluoride ${fmt(a.fluoride.mg_day_now, 1)}${Math.abs(a.fluoride.mg_day_new - a.fluoride.mg_day_now) > 0.05 ? ` → <b>${fmt(a.fluoride.mg_day_new, 1)}</b>` : ""} mg/day <span class="muted">(${fmt(a.fluoride.ppm_day_new * 1000, 2)} ppb/day in the tank)</span></span></div>` : "";
-    const kalk = a.kalk_now != null ? `<div class="kv">${this.icon("mdi:beaker-outline")}<span>Kalkwasser ${fmt(a.kalk_now, 0)} mL/day <span class="muted">(not changed)</span></span></div>` : "";
     return `<div class="alkgrid">
       <div class="g">${this.alkGauge(a.dkh, target, tol)}<div class="gv"><b>${a.dkh == null ? "—" : fmt(a.dkh, 2)}</b><span>dKH</span></div><small class="muted">target ${fmt(target)} ± ${fmt(tol)}</small></div>
       <div class="r"><div class="ah ${head[0]}c">${this.icon(head[1])}<b>${esc(head[2])}</b></div>
         ${a.state === "no_data" ? `<p class="hint">${esc(a.text)}</p>` : `${dose}${this.alkChangeBar(a.change_pct, max)}${a.capped ? `<p class="hint">Limited to ${fmt(max, 0)}% — test again before changing more.</p>` : ""}`}
-        <div class="kv">${this.icon("mdi:chart-line")}<span>${esc(trend)}${when ? ` · last test ${esc(when)}` : ""}</span></div>${fl}${kalk}
+        <div class="kv">${this.icon("mdi:chart-line")}<span>${esc(trend)}${when ? ` · last test ${esc(when)}` : ""}</span></div>
         <p class="hint">Change the doser yourself; Sentinel Controller only recommends.</p></div></div>`;
   },
 });
