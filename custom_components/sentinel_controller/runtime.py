@@ -55,7 +55,13 @@ class Runtime:
         self._tick()
         self._unsub = async_track_time_interval(self.hass, self._interval, timedelta(seconds=TICK_SECONDS))
         self._unsub_advice = async_track_time_interval(self.hass, self._advice_interval, ADVICE_EVERY)
-        self.hass.async_create_task(self.async_advise())
+        # Wait for HA to finish starting: before that, doser sensors may not exist yet (no unit -> wrong mL).
+        if self.hass.is_running:
+            self.hass.async_create_task(self.async_advise())
+        else:
+            from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED,
+                                            lambda _e: self.hass.async_create_task(self.async_advise()))
 
     async def async_stop(self) -> None:
         if self._unsub:
@@ -222,15 +228,14 @@ class Runtime:
         if not entity_id:
             return []
         cur = self.hass.states.get(entity_id)
-        unit = (cur.attributes.get("unit_of_measurement") if cur else "") or ""
-        volume = str(unit).strip().lower() in advisor.ML_PER_UNIT and str(unit).strip() != ""
+        cur_unit = (cur.attributes.get("unit_of_measurement") if cur else "") or ""
         states = []
         try:
             from homeassistant.components.recorder import get_instance, history
             from functools import partial
             res = await get_instance(self.hass).async_add_executor_job(partial(
                 history.state_changes_during_period, self.hass, start, entity_id=entity_id,
-                no_attributes=True, include_start_time_state=True))
+                no_attributes=False, include_start_time_state=True))
             states = res.get(entity_id, [])
         except Exception:  # noqa: BLE001 - recorder off or history unavailable: use the current state only
             _LOGGER.debug("No recorder history for %s", entity_id, exc_info=True)
@@ -241,7 +246,9 @@ class Runtime:
                 v = float(st.state)
             except (TypeError, ValueError):
                 continue
-            out.append((st.last_changed, advisor.to_ml(v, unit) if volume else v))
+            # Each reading's own unit; a reading stored without one takes the entity's current unit.
+            unit = str((st.attributes or {}).get("unit_of_measurement") or cur_unit).strip()
+            out.append((st.last_changed, advisor.to_ml(v, unit) if unit.lower() in advisor.ML_PER_UNIT and unit else v))
         return out
 
     async def async_advise(self) -> None:

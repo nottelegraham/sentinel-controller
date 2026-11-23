@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.19";
+const VERSION = "0.2.20";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -1272,7 +1272,7 @@ Object.assign(SentinelControllerCard.prototype, {
     if (!a.state) return `<p class="hint">Working out the first recommendation…</p>`;
     if (a.state === "setup") return `<div class="note warn">${this.icon("mdi:cog-outline")}<span>${esc(a.text)}</span>${this.btn("goto", "Open Setup", { to: "setup" }, "link")}</div>`;
     const when = a.dkh_at ? new Date(a.dkh_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
-    const trend = a.slope == null ? "Trend: needs readings over 12 h" : `Trend ${a.slope >= 0 ? "+" : ""}${fmt(a.slope, 2)} dKH/day`;
+    const trend = a.slope == null ? "Trend: needs 2 days of readings" : `Trend ${a.slope >= 0 ? "+" : ""}${fmt(a.slope, 2)} dKH/day`;
     const head = { raise: ["warn", "mdi:arrow-up-bold", "Raise NaOH"], lower: ["warn", "mdi:arrow-down-bold", "Lower NaOH"], hold: ["ok", "mdi:check-circle", "Keep NaOH as is"], no_data: ["", "mdi:information-outline", "Waiting for data"] }[a.state] || ["", "mdi:information-outline", ""];
     const dose = a.naoh_now == null ? "" : a.state === "raise" || a.state === "lower"
       ? `<div class="dose"><span class="muted">NaOH</span><b>${fmt(a.naoh_now, 0)}</b><span class="muted">→</span><b class="${head[0]}c">${fmt(a.naoh_new, 0)}</b><span class="muted">mL/day</span><span class="chip ${head[0]}">${a.change_pct >= 0 ? "+" : ""}${fmt(a.change_pct, 0)}%</span></div>`
