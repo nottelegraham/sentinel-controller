@@ -325,3 +325,29 @@ def test_source_kinds_default_and_merge():
     cfg = logic.merge_config({"source_kinds": {"dev1": "strip"}, "controllers": [{"device_id": "d", "name": "D", "outlets": ["switch.a"]}]})
     assert cfg["source_kinds"] == {"dev1": "strip"}
     assert cfg["controllers"][0]["outlets"] == ["switch.a"]
+
+
+def test_feed_pause_holds_outlets_on_top_of_their_function():
+    c = ctl(probes=[TEMP])
+    ch(c, 1, entity="switch.heater", fn={"type": "temperature", "param": "t1", "mode": "heater"})
+    ch(c, 2, entity="switch.return", fn={"type": "always_on"})
+    ch(c, 3, entity="switch.light", fn={"type": "always_off"})
+    c.config["feed_pauses"][0]["sockets"] = [{"ch": 1, "state": "off"}, {"ch": 2, "state": "off"}, {"ch": 3, "state": "on"}]
+    s = run(c, T0, inp(**{"sensor.temp": 75}))
+    assert s["channels"][1]["out"] is True and s["channels"][2]["out"] is True and s["channels"][3]["out"] is False
+    c.start_feed_pause(1, T0)
+    s = run(c, T0 + timedelta(minutes=1), inp(**{"sensor.temp": 75}))
+    assert s["channels"][1] == {"out": False, "reason": "feed pause"}
+    assert s["channels"][2]["out"] is False and s["channels"][3]["out"] is True
+    # maintenance beats the feed pause on the same outlet
+    c.config["maintenance"][0]["sockets"] = [{"ch": 2, "state": "on"}]
+    c.start_maintenance(1, T0)
+    s = run(c, T0 + timedelta(minutes=2), inp(**{"sensor.temp": 75}))
+    assert s["channels"][2] == {"out": True, "reason": "maintenance"}
+    s = run(c, T0 + timedelta(minutes=6), inp(**{"sensor.temp": 75}))  # feed pause (5 min) over
+    assert s["channels"][1]["out"] is True and s["channels"][3]["out"] is False
+
+
+def test_old_saved_feed_pauses_get_empty_sockets():
+    cfg = logic.merge_config({"feed_pauses": [{"n": 1, "name": "Feed", "minutes": 3, "filter_off": True, "timer": 0}]})
+    assert cfg["feed_pauses"][0]["sockets"] == [] and cfg["feed_pauses"][0]["name"] == "Feed"

@@ -306,6 +306,7 @@ class SentinelControllerCard extends HTMLElement {
     if (!s.reason) return "";
     if (s.reason === "manual override") return "Manual override";
     if (s.reason === "maintenance") return "Held by maintenance";
+    if (s.reason === "feed pause") return "Held by feed pause";
     if (s.reason === "blackout delay") return "Blackout delay";
     if (String(s.reason).startsWith("fallback")) return "No data — fallback";
     if (t === "temperature" || t === "ph") { const p = this.probe(fn.param); const v = this.st(["probes", fn.param, "value"]); return v == null ? "" : `${p?.name || "Probe"} ${fmt(v)}${this.unit(p)}`; }
@@ -481,6 +482,8 @@ class SentinelControllerCard extends HTMLElement {
       }
       case "manual": return run("channel_manual", ds.n, ds.v === "on");
       case "other_src": this.showOtherSrc = !this.showOtherSrc; return this._render();
+      case "ovmanage": this.manageModes = !this.manageModes; return this._render();
+      case "ovpin": return this._toggleOverview(ds.sec, ds.n);
       case "edit_kinds": this.editKinds = !this.editKinds; if (this.editKinds) this.showOtherSrc = true; return this._render();
       case "adopt": {
         const n = this.nextFree("channels", (c) => c.entity || c.name);
@@ -523,7 +526,7 @@ class SentinelControllerCard extends HTMLElement {
     } else {
       idx = this.cfg[secOf].findIndex((x) => x.n === Number(n)); if (idx < 0) return;
       draft = clone(this.cfg[secOf][idx]);
-      if (kind === "channel") { if (!draft.fn) draft.fn = { type: "always_off" }; isNew = !draft.entity && !draft.name; }
+      if (kind === "channel") { if (!draft.fn) draft.fn = { type: "always_off" }; isNew = !draft.entity && !draft.name; draft._holds = this._holdsOf(draft.n); }
       if (kind === "reminder" && !draft.text) { draft.enabled = true; draft.start = draft.start || new Date().toISOString().slice(0, 10); isNew = true; }
       if ((kind === "timer" || kind === "light") && !this.timerUsed(draft)) isNew = true;
       if (kind === "gate" && !this.gateUsed(draft)) isNew = true;
@@ -544,9 +547,14 @@ class SentinelControllerCard extends HTMLElement {
     const D = this.drawer; const err = this._validate(D);
     if (err) return this._toast(err, true);
     const list = clone(this.cfg[D.sec]);
-    if (D.kind === "probe" && D.idx < 0) list.push(D.draft); else list[D.idx] = D.draft;
+    const item = clone(D.draft); const holds = item._holds; delete item._holds;
+    if (D.kind === "probe" && D.idx < 0) list.push(item); else list[D.idx] = item;
     try {
-      const r = await this._hass.callWS({ type: "sentinel_controller/save", section: D.sec, value: list });
+      let r = await this._hass.callWS({ type: "sentinel_controller/save", section: D.sec, value: list });
+      if (D.kind === "channel" && holds) {
+        this.cfg = r.config;
+        for (const [sec, value] of Object.entries(this._applyHolds(item.n, holds))) r = await this._hass.callWS({ type: "sentinel_controller/save", section: sec, value });
+      }
       this.cfg = r.config; this.status = r.status; this.drawer = null;
       this.shadowRoot.querySelector(".drawer-wrap")?.remove();
       this._toast("Saved"); this._render();
@@ -568,7 +576,11 @@ class SentinelControllerCard extends HTMLElement {
     if (D.kind === "probe") list = list.filter((p) => p.id !== D.draft.id);
     else list[D.idx] = blank[D.kind](list[D.idx]);
     try {
-      const r = await this._hass.callWS({ type: "sentinel_controller/save", section: D.sec, value: list });
+      let r = await this._hass.callWS({ type: "sentinel_controller/save", section: D.sec, value: list });
+      if (D.kind === "channel") {
+        this.cfg = r.config;
+        for (const [sec, value] of Object.entries(this._applyHolds(D.draft.n, null))) r = await this._hass.callWS({ type: "sentinel_controller/save", section: sec, value });
+      }
       this.cfg = r.config; this.status = r.status; this.drawer = null;
       this.shadowRoot.querySelector(".drawer-wrap")?.remove();
       this._toast("Removed"); this._render();
@@ -599,7 +611,7 @@ class SentinelControllerCard extends HTMLElement {
     const D = this.drawer; if (!D || !["channel", "gate"].includes(D.kind)) return;
     clearTimeout(this._pv);
     this._pv = setTimeout(async () => {
-      const item = clone(D.draft); ["in1", "in2"].forEach((k) => item[k] && delete item[k].key);
+      const item = clone(D.draft); delete item._holds; ["in1", "in2"].forEach((k) => item[k] && delete item[k].key);
       try { this.preview = await this._hass.callWS({ type: "sentinel_controller/preview", kind: D.kind === "gate" ? "logic" : "channel", item }); }
       catch (e) { this.preview = { error: e.message }; }
       const el = this.shadowRoot.querySelector("[data-preview]"); if (el) el.innerHTML = this._previewHTML();
@@ -610,7 +622,7 @@ class SentinelControllerCard extends HTMLElement {
     if (p.error) return `<span class="muted">${esc(p.error)}</span>`;
     const g = this.drawer?.kind === "gate";
     const r = String(p.reason || "");
-    const extra = r.startsWith("fallback") ? " — data is missing, so it uses the fallback state" : r === "maintenance" ? " — a maintenance mode is holding it" : r === "manual override" ? " — manual override is on" : r === "blackout delay" ? " — blackout delay" : "";
+    const extra = r.startsWith("fallback") ? " — data is missing, so it uses the fallback state" : r === "maintenance" ? " — a maintenance mode is holding it" : r === "feed pause" ? " — a feed pause is holding it" : r === "manual override" ? " — manual override is on" : r === "blackout delay" ? " — blackout delay" : "";
     return `${this.icon(p.out ? "mdi:power-plug" : "mdi:power-plug-off-outline", p.out ? "okc" : "muted")}<span>${g ? "This gate is" : "With these settings this outlet would be"} <b>${p.out == null ? "unknown" : p.out ? "ON" : "OFF"}</b> right now${esc(extra)}.</span>`;
   }
   _drawerBar() { const b = this.shadowRoot.querySelector(".dfoot .dirty"); if (b) b.textContent = this.drawer?.dirty ? "Unsaved changes" : ""; }
@@ -648,6 +660,7 @@ class SentinelControllerCard extends HTMLElement {
       ${this._conflictNote(d)}
       <div class="lbl">What should it do?</div><div class="ftiles">${tiles}</div>
       <div class="detail">${this._fnDetail(d.fn, "fn")}</div>
+      ${this._holdRows(d)}
       <div class="preview" data-preview></div>
       <details ${d.invert || d.blackout_min || d.fallback === "on" ? "open" : ""}><summary>Advanced</summary>
         ${this.field("Invert", this.ctl("bool", this.d("invert"), d.invert), "Swap ON and OFF")}
@@ -655,6 +668,38 @@ class SentinelControllerCard extends HTMLElement {
         ${this.field("Blackout delay", this.ctl("num", this.d("blackout_min"), d.blackout_min, { step: 1, min: 0, u: "min" }), "Stay OFF this long after Home Assistant starts or power returns")}
         ${this.field("Operating hours", `<span>${fmt(s.hours ?? 0, 1)} h</span>${this.btn("hours", "Reset", { n: d.n }, "ghost sm")}`)}
       </details>`;
+  }
+  // Feed pauses and maintenance modes can hold this outlet ON or OFF on top of what it normally does.
+  // The holds live on each pause (its "sockets" list); the drawer edits a copy in draft._holds.
+  _holdsOf(n) {
+    const h = { fp: {}, mt: {} };
+    for (const [k, sec] of [["fp", "feed_pauses"], ["mt", "maintenance"]])
+      for (const x of this.cfg[sec]) { const s = (x.sockets || []).find((y) => Number(y.ch) === Number(n)); h[k][x.n] = s ? (s.state === "on" ? "on" : "off") : ""; }
+    return h;
+  }
+  _holdRows(d) {
+    const h = d._holds || this._holdsOf(d.n);
+    const opts = [["", "No change"], ["off", "OFF"], ["on", "ON"]];
+    const row = (k, x, icon, def) => `<div class="prow">${this.icon(icon)}<span class="grow">${esc(x.name || def + " " + x.n)}</span>${this.ctl("seg", this.d(`_holds.${k}.${x.n}`), h[k][x.n] || "", { options: opts })}</div>`;
+    return `<div class="lbl">During feed pauses &amp; maintenance</div>
+      <p class="hint">Hold this outlet OFF or ON while a pause runs, on top of what it normally does. When the pause ends it goes back to normal.${this.fnType(d) === "filter" ? " (This outlet already turns OFF during its chosen feed pause.)" : ""}</p>
+      <div class="holds">${this.cfg.feed_pauses.map((x) => row("fp", x, "mdi:fish", "Feed pause")).join("")}${this.cfg.maintenance.map((x) => row("mt", x, "mdi:wrench-outline", "Maintenance")).join("")}</div>`;
+  }
+  fnType(d) { return d.fn?.type || "always_off"; }
+  // Apply a channel's holds to copies of the feed pause and maintenance lists; returns only the lists that changed.
+  _applyHolds(n, holds) {
+    const out = {};
+    for (const [k, sec] of [["fp", "feed_pauses"], ["mt", "maintenance"]]) {
+      const before = JSON.stringify(this.cfg[sec]);
+      const list = clone(this.cfg[sec]);
+      for (const x of list) {
+        const keep = (x.sockets || []).filter((y) => Number(y.ch) !== Number(n));
+        const st = holds ? holds[k][x.n] : "";
+        x.sockets = st ? [...keep, { ch: Number(n), state: st }] : keep;
+      }
+      if (JSON.stringify(list) !== before) out[sec] = list;
+    }
+    return out;
   }
   _conflictNote(d) {
     if (!d.entity) return "";
@@ -762,12 +807,16 @@ class SentinelControllerCard extends HTMLElement {
       ${this.field("Length", this.ctl("num", this.d("minutes"), d.minutes, { step: 1, min: 1, max: this.L.feed_pause_max_min, u: "min" }), `1–${this.L.feed_pause_max_min} minutes`)}
       ${this.field("Turn off its outlets", this.ctl("bool", this.d("filter_off"), d.filter_off), "Outlets set to this feed pause turn OFF while it runs")}
       ${this.field("Start automatically", this.ctl("select", this.d("timer"), d.timer, { numeric: 1, options: [[0, "No — start it by hand"], ...ev.map((t) => [t.n, `${t.name || "Timer " + t.n} · ${this.periodsText(t.entries)}`])] }), ev.length ? "" : "To start it on a schedule, create a 'Start events' timer on the Schedules tab")}
-      <div class="lbl">Outlets affected</div><p class="hint">${users.length ? users.map((c) => esc(this.chName(c))).join(" · ") : "None yet. On the Outlets tab, choose 'Feed pause' for the outlets to stop."}</p>`;
+      <div class="lbl">While it runs</div>${this._sockRows(d) || `<p class="hint">No outlets held yet.</p>`}<div>${this.btn("sock_add", "Add outlet", {}, "ghost sm", "mdi:plus")}</div>
+      <p class="hint">${users.length ? `Also OFF while it runs: ${users.map((c) => esc(this.chName(c))).join(" · ")} (set to 'Feed pause' on the Outlets tab).` : "You can also pick these from each outlet on the Outlets tab."}</p>`;
+  }
+  _sockRows(d) {
+    const used = this.usedChannels();
+    return (d.sockets || []).map((s, i) => `<div class="prow">${this.ctl("select", this.d(`sockets.${i}.ch`), s.ch, { numeric: 1, options: (used.length ? used : this.cfg.channels.slice(0, 1)).map((c) => [c.n, this.chName(c)]) })}
+      ${this.ctl("seg", this.d(`sockets.${i}.state`), s.state, { options: [["off", "OFF"], ["on", "ON"]] })}<span class="grow"></span>${this.btn("sock_del", "", { i }, "ghost sm icon", "mdi:close")}</div>`).join("");
   }
   d_mt(d) {
-    const used = this.usedChannels();
-    const rows = (d.sockets || []).map((s, i) => `<div class="prow">${this.ctl("select", this.d(`sockets.${i}.ch`), s.ch, { numeric: 1, options: (used.length ? used : this.cfg.channels.slice(0, 1)).map((c) => [c.n, this.chName(c)]) })}
-      ${this.ctl("seg", this.d(`sockets.${i}.state`), s.state, { options: [["off", "OFF"], ["on", "ON"]] })}<span class="grow"></span>${this.btn("sock_del", "", { i }, "ghost sm icon", "mdi:close")}</div>`).join("");
+    const rows = this._sockRows(d);
     return `${this.field("Name", this.ctl("text", this.d("name"), d.name, { ph: "e.g. Water change" }))}
       ${this.field("Length", this.ctl("num", this.d("minutes"), d.minutes, { step: 1, min: 1, max: this.L.maintenance_max_min, u: "min" }), `Up to ${this.L.maintenance_max_min} minutes`)}
       <div class="lbl">While it runs</div>${rows || `<p class="hint">No outlets yet.</p>`}<div>${this.btn("sock_add", "Add outlet", {}, "ghost sm", "mdi:plus")}</div>
@@ -967,22 +1016,42 @@ class SentinelControllerCard extends HTMLElement {
   p_overview() {
     const probes = this.cfg.probes.map((p) => `<button type="button" class="card probe" data-act="open" data-kind="probe" data-n="${esc(p.id)}"><span class="cap">${esc(this.edev(p.entity) || p.kind)}</span><b class="pn">${esc(p.name || p.id)}</b><div data-live="probe:${esc(p.id)}"></div></button>`).join("");
     const outs = this.usedChannels().filter((c) => c.entity);
-    const fps = this.cfg.feed_pauses.filter((f) => f.n === 1 || this.usersOf("filter", f.n).length || f.name !== `Feed pause ${f.n}`);
-    const mts = this.cfg.maintenance.filter((m) => (m.sockets || []).length || m.name !== `Maintenance ${m.n}`);
-    const modes = [...fps.map((f) => `<div class="card mode"><div class="mh">${this.icon("mdi:fish")}<b>${esc(f.name || "Feed pause " + f.n)}</b></div><div data-live="fp:${f.n}"></div></div>`),
-      ...mts.map((m) => `<div class="card mode"><div class="mh">${this.icon("mdi:wrench-outline")}<b>${esc(m.name || "Maintenance " + m.n)}</b></div><div data-live="mt:${m.n}"></div></div>`)].join("");
+    const M = this.manageModes;
+    const card = (x, sec, kind, icon, def) => {
+      const on = this.onOverview(sec, x);
+      if (!M && !on) return "";
+      const ck = M ? `<button type="button" class="ck ${on ? "on" : ""}" role="checkbox" aria-checked="${on}" aria-label="Show ${esc(x.name || def + " " + x.n)} on Overview" data-act="ovpin" data-sec="${sec}" data-n="${x.n}">${this.icon(on ? "mdi:checkbox-marked" : "mdi:checkbox-blank-outline")}</button>` : "";
+      return `<div class="card mode ${M && !on ? "dim" : ""}"><div class="mh">${ck}${this.icon(icon)}<b>${esc(x.name || def + " " + x.n)}</b></div><div data-live="${kind}:${x.n}"></div></div>`;
+    };
+    const modes = [...this.cfg.feed_pauses.map((f) => card(f, "feed_pauses", "fp", "mdi:fish", "Feed pause")),
+      ...this.cfg.maintenance.map((m) => card(m, "maintenance", "mt", "mdi:wrench-outline", "Maintenance"))].join("");
     const water = this.cfg.level_circuits.filter((c) => c.mode !== "off").map((c) => `<div class="card lvl"><button type="button" class="lh" data-act="open" data-kind="circuit" data-n="${c.n}">${this.icon(LEVEL[c.mode].icon, "ic")}<div><b>${esc(c.name || LEVEL[c.mode].label)}</b><small>${esc(LEVEL[c.mode].label)}</small></div></button><div data-live="lvl:${c.n}"></div></div>`).join("");
     const nextCh = this.nextFree("channels", (c) => c.entity || c.name);
     return `<div data-live="power"></div><div data-live="override"></div><div data-live="alarms"></div>
       ${this.sec("Probes", this.btn("goto", "Manage", { to: "probes" }, "link"))}
       <div class="grid g4">${probes || this.empty("mdi:thermometer-plus", "No probes yet", "Add temperature and pH from any controller — GHL, HYDROS, Apex.", this.btn("goto", "Add a probe", { to: "probes", kind: "probe", n: "new" }, "primary"))}</div>
-      ${this.sec("Feed & maintenance", this.btn("goto", "Manage", { to: "modes" }, "link"))}
-      <div class="grid g4">${modes}</div>
+      ${this.sec("Feed & maintenance", M ? `<span class="sbtns">${this.btn("goto", "Edit pauses", { to: "modes" }, "link")}${this.btn("ovmanage", "Done", {}, "primary sm")}</span>` : this.btn("ovmanage", "Manage", {}, "link"))}
+      ${M ? `<p class="hint">Tick the pauses to show on Overview.</p>` : ""}
+      <div class="grid g4">${modes || `<p class="hint">No pauses on Overview. Tap Manage to pick some.</p>`}</div>
       ${this.sec("Outlets", this.btn("goto", "Manage", { to: "outlets" }, "link"))}
       <div class="grid g3">${outs.map((c) => this._outletCard(c)).join("") || this.empty("mdi:power-socket-us", "No outlets yet", "Pick any switch or smart plug and choose what it does.", nextCh ? this.btn("goto", "Add an outlet", { to: "outlets", kind: "channel", n: nextCh }, "primary") : "")}</div>
       ${this.controllers().map((c) => this.ctrlSection(c)).join("")}
       ${this.dosers().length ? this.doserSections(this.dosers()) : ""}
       ${water ? `${this.sec("Water", this.btn("goto", "Manage", { to: "water" }, "link"))}<div class="grid g3">${water}</div>` : ""}`;
+  }
+  // Shown on Overview? An explicit choice (overview: true/false) wins; otherwise the old guess.
+  onOverview(sec, x) {
+    if (typeof x.overview === "boolean") return x.overview;
+    if (sec === "feed_pauses") return x.n === 1 || this.usersOf("filter", x.n).length > 0 || (x.sockets || []).length > 0 || x.name !== `Feed pause ${x.n}`;
+    return (x.sockets || []).length > 0 || x.name !== `Maintenance ${x.n}`;
+  }
+  async _toggleOverview(sec, n) {
+    const list = clone(this.cfg[sec]);
+    for (const x of list) x.overview = this.onOverview(sec, x);  // freeze the current picture, then flip one
+    const t = list.find((x) => x.n === Number(n)); if (!t) return;
+    t.overview = !t.overview;
+    try { const r = await this._hass.callWS({ type: "sentinel_controller/save", section: sec, value: list }); this.cfg = r.config; this.status = r.status; this._render(); }
+    catch (e) { this._toast(`Not saved: ${e.message || e}`, true); }
   }
   _outletCard(c) {
     const f = funcOf(c.fn);
@@ -1033,11 +1102,15 @@ class SentinelControllerCard extends HTMLElement {
         ${this.field("Turn lights off at setpoint +", this.ctl("num", this.f("lightred", "light_reduction.limit"), lr.limit, { step: 0.1, min: 0, u: this.unit(this.probe(lr.probe)) }), "Light schedules with 'Turn off when too warm' stay OFF for the rest of the day")}
         ${this.st(["light_reduction_today"]) ? `<div class="note warn">${this.icon("mdi:thermometer-alert")}<span>Triggered today — those lights stay off until midnight.</span></div>` : ""}</div>`;
   }
+  _holdSummary(x, offUsers = []) {
+    const parts = [...offUsers.map((c) => `OFF ${this.chName(c)}`), ...(x.sockets || []).map((s) => `${s.state === "on" ? "ON" : "OFF"} ${this.item("channels", s.ch) ? this.chName(this.item("channels", s.ch)) : "outlet " + s.ch}`)];
+    return parts.join(" · ") || "No outlets yet";
+  }
   p_modes() {
     const fps = this.cfg.feed_pauses.map((f) => `<div class="card mode"><div class="mh">${this.icon("mdi:fish")}<b>${esc(f.name || "Feed pause " + f.n)}</b>${this.btn("open", "", { kind: "fp", n: f.n }, "ghost sm icon", "mdi:pencil")}</div>
-      <small class="muted">${this.usersOf("filter", f.n).length} outlet(s)${Number(f.timer) ? " · starts on a schedule" : ""}</small><div data-live="fp:${f.n}"></div></div>`).join("");
+      <small class="muted">${esc(this._holdSummary(f, this.usersOf("filter", f.n)))}${Number(f.timer) ? " · starts on a schedule" : ""}</small><div data-live="fp:${f.n}"></div></div>`).join("");
     const mts = this.cfg.maintenance.map((m) => `<div class="card mode"><div class="mh">${this.icon(m.power_cut ? "mdi:flash-alert-outline" : "mdi:wrench-outline")}<b>${esc(m.name || "Maintenance " + m.n)}</b>${this.btn("open", "", { kind: "mt", n: m.n }, "ghost sm icon", "mdi:pencil")}</div>
-      <small class="muted">${esc((m.sockets || []).map((s) => `${s.state === "on" ? "ON" : "OFF"} ${this.item("channels", s.ch)?.name || "outlet " + s.ch}`).join(" · ") || "No outlets yet")}${m.power_cut ? " · power-cut program" : ""}</small><div data-live="mt:${m.n}"></div></div>`).join("");
+      <small class="muted">${esc(this._holdSummary(m))}${m.power_cut ? " · power-cut program" : ""}</small><div data-live="mt:${m.n}"></div></div>`).join("");
     return `${this.sec("Feed pause")}<div class="grid g4">${fps}</div>${this.sec("Maintenance")}<div class="grid g4">${mts}</div>
       <p class="hint">Want the skimmer to wait after maintenance or a feed pause? Use a Delayed OFF or Delayed ON gate on the Logic tab.</p>`;
   }
@@ -1170,7 +1243,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .chip ha-icon{--mdc-icon-size:14px}.chip.ok{background:var(--okb);color:#1e7a39}.chip.bad{background:var(--badb);color:#b02a2a}.chip.warn{background:var(--warnb);color:var(--warn)}.chip.info{background:var(--infob);color:var(--ac)}
 .chips{display:flex;flex-wrap:wrap;gap:6px}.row-btns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
 .warnc,.badc{display:flex;align-items:center;gap:3px}.warnc{color:var(--warn)!important}.badc{color:var(--bad)!important}.warnc ha-icon,.badc ha-icon{--mdc-icon-size:14px}
-.mode{padding:12px 14px;display:flex;flex-direction:column;gap:8px}.mh{display:flex;align-items:center;gap:8px}.mh b{flex:1}.mh>ha-icon{color:var(--ac)}
+.mode{padding:12px 14px;display:flex;flex-direction:column;gap:8px}.mode.dim{opacity:.5}.mode.dim:focus-within{opacity:.8}
+.ck{border:0;background:none;padding:0;margin:0;cursor:pointer;color:var(--sec);display:inline-flex}.ck.on{color:var(--ac)}.ck ha-icon{--mdc-icon-size:22px}
+.sbtns{display:inline-flex;gap:10px;align-items:center}.holds{display:flex;flex-direction:column;gap:6px}.holds .grow{flex:1;min-width:120px}.mh{display:flex;align-items:center;gap:8px}.mh b{flex:1}.mh>ha-icon{color:var(--ac)}
 .mode-st{display:flex;align-items:baseline;gap:6px;min-height:28px}.cd{font-size:24px;font-weight:700;color:var(--ac)}
 .prog{height:6px;border-radius:3px;background:var(--offb);overflow:hidden;margin:6px 0 10px}.prog i{display:block;height:100%;background:var(--ac);transition:width 1s linear}
 .mode [data-live] .btn{width:100%;justify-content:center}

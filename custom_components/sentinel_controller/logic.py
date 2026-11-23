@@ -114,7 +114,7 @@ def default_config() -> dict[str, Any]:
         "illumination": [{"n": i, "name": "", "color": "#2196f3", "entries": [], "temp_reduction": False}
                          for i in range(1, N_ILLUMINATION + 1)],
         "light_reduction": {"probe": "", "limit": 3.0},
-        "feed_pauses": [{"n": i, "name": f"Feed pause {i}", "minutes": 5, "filter_off": True, "timer": 0}
+        "feed_pauses": [{"n": i, "name": f"Feed pause {i}", "minutes": 5, "filter_off": True, "timer": 0, "sockets": []}
                         for i in range(1, N_FEED_PAUSES + 1)],
         "maintenance": [{"n": i, "name": f"Maintenance {i}", "minutes": 60, "sockets": [],
                          "power_cut": False, "after_power": "stop"} for i in range(1, N_MAINTENANCE + 1)],
@@ -782,14 +782,19 @@ class Controller:
 
         # Channels
         blackout_from = self._dt(self.rt.get("blackout_from"))
-        maint_force: dict[int, bool] = {}
-        for mt in sorted(cfg["maintenance"], key=lambda x: -x["n"]):  # lower number wins
-            if self.maint_active(mt["n"], now):
-                for s in mt.get("sockets") or []:
-                    try:
-                        maint_force[int(s.get("ch"))] = str(s.get("state", "off")).lower() == "on"
-                    except (TypeError, ValueError):
-                        continue
+        def holds(section: str, active) -> dict[int, bool]:
+            force: dict[int, bool] = {}
+            for it in sorted(cfg[section], key=lambda x: -x["n"]):  # lower number wins
+                if active(it["n"], now):
+                    for s in it.get("sockets") or []:
+                        try:
+                            force[int(s.get("ch"))] = str(s.get("state", "off")).lower() == "on"
+                        except (TypeError, ValueError):
+                            continue
+            return force
+
+        fp_force = holds("feed_pauses", self.fp_active)
+        maint_force = holds("maintenance", self.maint_active)
         channels: dict[int, dict] = {}
         for ch in cfg["channels"]:
             n = ch["n"]
@@ -800,7 +805,10 @@ class Controller:
                 base = str(ch.get("fallback", "off")).lower() == "on"
                 reason = "fallback (no data)"
             out = _inv(base, ch.get("invert"))
-            if n in maint_force:
+            if n in fp_force:
+                out = fp_force[n]
+                reason = "feed pause"
+            if n in maint_force:  # maintenance beats a feed pause
                 out = maint_force[n]
                 reason = "maintenance"
             bo = float(ch.get("blackout_min") or 0)
