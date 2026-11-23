@@ -1,7 +1,7 @@
 /* Sentinel Controller card.
  * Control scheme follows the GHL ProfiLux 4 resource guide; look follows the Reef Ecosystem dashboard. */
 (() => {
-const VERSION = "0.2.20";
+const VERSION = "0.2.21";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -1328,8 +1328,8 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .mode{padding:12px 14px;display:flex;flex-direction:column;gap:8px}.mode.dim{opacity:.5}.mode.dim:focus-within{opacity:.8}
 .ck{border:0;background:none;padding:0;margin:0;cursor:pointer;color:var(--sec);display:inline-flex}.ck.on{color:var(--ac)}.ck ha-icon{--mdc-icon-size:22px}
 .sbtns{display:inline-flex;gap:10px;align-items:center}
-.alk{padding:14px}.alkgrid{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:18px;align-items:center}@media(max-width:560px){.alkgrid{grid-template-columns:1fr}}
-.alk .g{display:flex;flex-direction:column;align-items:center;position:relative}.alk .gauge{width:100%;max-width:220px}.alk .gv{margin-top:2px;display:flex;align-items:baseline;gap:4px}.alk .gv b{font-size:26px}
+.alk{padding:14px;max-width:calc(50% - 6px)}@media(max-width:900px){.alk{max-width:none}}.alkgrid{display:grid;grid-template-columns:minmax(130px,180px) 1fr;gap:14px;align-items:center}@media(max-width:560px){.alkgrid{grid-template-columns:1fr}}
+.alk .g{display:flex;flex-direction:column;align-items:center;position:relative}.alk .gauge{width:100%;max-width:180px}.alk .gv{margin-top:2px;display:flex;align-items:baseline;gap:4px}.alk .gv b{font-size:26px}
 .alk .r{display:flex;flex-direction:column;gap:8px;min-width:0}.alk .ah{display:flex;align-items:center;gap:6px;font-size:16px}
 .alk .dose{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}.alk .dose b{font-size:22px}.alk .kv{display:flex;gap:6px;align-items:flex-start;font-size:13px;color:var(--sec)}.alk .kv ha-icon{--mdc-icon-size:16px}
 .chg{position:relative;height:10px;border-radius:5px;background:var(--offb);margin-top:4px}.chg .mid{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--off)}
