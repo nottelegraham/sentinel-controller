@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import CARD_VERSION, DOMAIN, SIGNAL_UPDATE
-from . import logic
+from . import advisor, logic
 
 
 def _rt(hass: HomeAssistant):
@@ -24,6 +24,7 @@ def _limits() -> dict[str, Any]:
         "level_circuits": logic.N_LEVEL_CIRCUITS, "level_sensors": logic.N_LEVEL_SENSORS,
         "logic": logic.N_LOGIC, "reminders": logic.N_REMINDERS, "probes": logic.N_PROBES,
         "feed_pause_max_min": logic.FEED_PAUSE_MAX_MIN, "maintenance_max_min": logic.MAINTENANCE_MAX_MIN,
+        "alk_defaults": advisor.DEFAULTS,
         "fn_types": logic.FN_TYPES, "level_modes": logic.LEVEL_MODES, "logic_ops": logic.LOGIC_OPS,
     }
 

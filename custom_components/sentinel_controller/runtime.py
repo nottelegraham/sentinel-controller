@@ -14,13 +14,16 @@ from homeassistant.util import dt as dt_util
 from .const import RESEND_SECONDS, SIGNAL_UPDATE, STORE_CONFIG, STORE_RUNTIME, TICK_SECONDS
 from . import logic
 from .logic import Controller, Input, merge_config
+from . import advisor
+
+ADVICE_EVERY = timedelta(minutes=10)
 
 _LOGGER = logging.getLogger(__name__)
 
 SWITCHABLE = {"switch", "light", "fan", "input_boolean", "siren", "humidifier", "select"}
 CONFIG_SECTIONS = {
     "probes", "level_sensors", "timers", "illumination", "light_reduction", "feed_pauses", "maintenance",
-    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min", "data_source", "controllers", "source_kinds", "doser_sections", "doser_names", "outlet_names",
+    "level_circuits", "logic", "channels", "reminders", "power_cut", "notify", "data_timeout_min", "data_source", "controllers", "source_kinds", "doser_sections", "doser_names", "outlet_names", "alk_advisor",
 }
 
 
@@ -38,26 +41,36 @@ class Runtime:
         self._last_repeat: datetime | None = None
         self._last_daily: str = ""
         self._last_tick: datetime | None = None
+        self.advice: dict[str, Any] = {}
+        self._last_advice_key: str = ""
+        self._unsub_advice: CALLBACK_TYPE | None = None
 
     async def async_start(self) -> None:
         cfg = await self.cfg_store.async_load()
         rt = await self.rt_store.async_load() or {}
         self._hours = rt.pop("_hours", {}) if isinstance(rt, dict) else {}
         self._last_daily = rt.pop("_last_daily", "") if isinstance(rt, dict) else ""
+        self._last_advice_key = rt.pop("_last_advice", "") if isinstance(rt, dict) else ""
         self.ctl = Controller(cfg, rt, started=dt_util.now())
         self._tick()
         self._unsub = async_track_time_interval(self.hass, self._interval, timedelta(seconds=TICK_SECONDS))
+        self._unsub_advice = async_track_time_interval(self.hass, self._advice_interval, ADVICE_EVERY)
+        self.hass.async_create_task(self.async_advise())
 
     async def async_stop(self) -> None:
         if self._unsub:
             self._unsub()
             self._unsub = None
+        if self._unsub_advice:
+            self._unsub_advice()
+            self._unsub_advice = None
         await self.rt_store.async_save(self._rt_data())
 
     def _rt_data(self) -> dict:
         data = dict(self.ctl.rt) if self.ctl else {}
         data["_hours"] = self._hours
         data["_last_daily"] = self._last_daily
+        data["_last_advice"] = self._last_advice_key
         return data
 
     def _save_rt(self) -> None:
@@ -86,6 +99,8 @@ class Runtime:
             merged["probes"] = value
         self.ctl.config = merged
         await self.async_save_config()
+        if section == "alk_advisor":
+            await self.async_advise()
         self._tick()
 
     # ------------------------------------------------------------------ inputs
@@ -127,6 +142,7 @@ class Runtime:
         self._last_tick = now
         self._apply(status, now, dt)
         self._notify(status, now)
+        status["alk_advice"] = self.advice
         self.status = status
         self._save_rt()
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
@@ -195,6 +211,79 @@ class Runtime:
             self.hass.async_create_task(
                 self.hass.services.async_call(domain, "turn_on" if want else "turn_off", {"entity_id": ent},
                                               blocking=False))
+
+    # ------------------------------------------------------------------ alkalinity advice
+    @callback
+    def _advice_interval(self, _now) -> None:
+        self.hass.async_create_task(self.async_advise())
+
+    async def _history(self, entity_id: str, start: datetime) -> list[tuple[datetime, float]]:
+        """Numeric history of one entity from the recorder, values converted to mL for volume units."""
+        if not entity_id:
+            return []
+        cur = self.hass.states.get(entity_id)
+        unit = (cur.attributes.get("unit_of_measurement") if cur else "") or ""
+        volume = str(unit).strip().lower() in advisor.ML_PER_UNIT and str(unit).strip() != ""
+        states = []
+        try:
+            from homeassistant.components.recorder import get_instance, history
+            from functools import partial
+            res = await get_instance(self.hass).async_add_executor_job(partial(
+                history.state_changes_during_period, self.hass, start, entity_id=entity_id,
+                no_attributes=True, include_start_time_state=True))
+            states = res.get(entity_id, [])
+        except Exception:  # noqa: BLE001 - recorder off or history unavailable: use the current state only
+            _LOGGER.debug("No recorder history for %s", entity_id, exc_info=True)
+            states = [cur] if cur else []
+        out = []
+        for st in states:
+            try:
+                v = float(st.state)
+            except (TypeError, ValueError):
+                continue
+            out.append((st.last_changed, advisor.to_ml(v, unit) if volume else v))
+        return out
+
+    async def async_advise(self) -> None:
+        if not self.ctl:
+            return
+        cfg = {**advisor.DEFAULTS, **(self.ctl.config.get("alk_advisor") or {})}
+        if not cfg.get("enabled"):
+            self.advice = {}
+            return
+        start = dt_util.now() - timedelta(days=max(1, float(cfg.get("window_days") or 7)))
+        try:
+            dkh = await self._history(cfg.get("dkh_entity", ""), start)
+            naoh = await self._history(cfg.get("naoh_entity", ""), start)
+            kalk = await self._history(cfg.get("kalk_entity", ""), start)
+            adv = advisor.recommend(cfg, dkh, naoh, kalk)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Sentinel Controller alkalinity advice failed")
+            return
+        adv["updated"] = dt_util.now().isoformat()
+        self.advice = adv
+        self._notify_advice(cfg, adv)
+        if self.status:
+            self.status["alk_advice"] = adv
+            async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    @callback
+    def _notify_advice(self, cfg: dict, adv: dict) -> None:
+        """One message per new dKH reading that calls for a dose change."""
+        if adv.get("state") not in ("raise", "lower"):
+            return
+        key = f"{adv.get('dkh_at')}|{round(adv.get('naoh_new') or 0)}"
+        if key == self._last_advice_key:
+            return
+        self._last_advice_key = key
+        self._save_rt()
+        targets = [t for t in ((self.ctl.config.get("notify") or {}).get("targets") or []) if t]
+        if not cfg.get("notify", True) or not targets:
+            return
+        for t in targets:
+            svc = t.split(".", 1)[1] if t.startswith("notify.") else t
+            self.hass.async_create_task(self.hass.services.async_call(
+                "notify", svc, {"title": "Sentinel Controller: alkalinity", "message": adv.get("text", "")}, blocking=False))
 
     # ------------------------------------------------------------------ notifications
     @callback

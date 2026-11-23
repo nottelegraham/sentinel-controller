@@ -16,6 +16,7 @@ It does **not** talk to a GHL controller. Probe values come from any Home Assist
 | Functions | Always off/on, Temperature (Heater/Cooler), pH value (Control upwards/downwards), Timer, Illumination, Filter (feed pause), Maintenance, Fill water, Fill water ATO only, Fill water AWC only, Drain water, Programmable logic |
 | Processes | 32 timers. Normal (ON/OFF pairs) or Event start; special weekdays or day intervals (repeat every N days, starting date) |
 | Illumination | 16 non-dimmable channels with ON/OFF times; temperature-dependent light reduction (OFF for the rest of the day at nominal + limit) |
+| Alkalinity advice | Recommends a new daily NaOH dose from measured dKH (any sensor), its trend and the NaOH container's actual use; shows fluoride dosed with it and kalk use. Gauge on Overview plus a notification. Never changes the doser |
 | Feed pause | 4 feed pauses, 1–120 min, Filter off, hold any outlet ON or OFF while it runs, started manually or by an Event-start timer |
 | Maintenance / Power cut | 4 modes: sockets ON or OFF for up to 240 min; any mode can be the power-cut emergency program. Each outlet's editor can set its feed pause and maintenance holds, and Overview → Manage picks which pauses show there |
 | Level control | 8 control circuits: Auto top off, Min/Max control, ATO with 2 sensors, Water change, ATO & water change, Leakage detection; maximum on-time failsafe, automatic error reset, ATO timer, water change timer. 8 level sensors with invert and reaction time |

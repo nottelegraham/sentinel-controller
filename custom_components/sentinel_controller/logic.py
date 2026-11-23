@@ -140,6 +140,7 @@ def default_config() -> dict[str, Any]:
         "source_kinds": {},
         "outlet_names": {},  # entity_id -> name for a controller or strip outlet
         "doser_names": {},  # device_id -> {pump number: name shown on the card}
+        "alk_advisor": {},  # alkalinity dosing advice settings (see advisor.DEFAULTS)
         "doser_sections": {},  # device_id -> {pump number: section name} for the dosing cards  # device_id -> "controller" | "strip" | "other": the user's fix to the card's guess
     }
 

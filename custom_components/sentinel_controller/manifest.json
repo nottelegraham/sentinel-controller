@@ -2,7 +2,8 @@
   "domain": "sentinel_controller",
   "name": "Sentinel Controller",
   "after_dependencies": [
-    "lovelace"
+    "lovelace",
+    "recorder"
   ],
   "codeowners": [
     "@nottelegraham"

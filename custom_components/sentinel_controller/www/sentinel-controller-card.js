@@ -915,6 +915,7 @@ class SentinelControllerCard extends HTMLElement {
       case "alarms": return this._alarmBanner();
       case "ch": return this._chState(this.item("channels", a));
       case "probe": { const p = this.probe(a); return p ? this._probeLive(p) : ""; }
+      case "alk": return this.alkLive();
       case "fp": return this._fpLive(this.item("feed_pauses", a));
       case "mt": return this._mtLive(this.item("maintenance", a));
       case "lvl": return this._lvlLive(this.item("level_circuits", a));
@@ -1030,6 +1031,7 @@ class SentinelControllerCard extends HTMLElement {
     return `<div data-live="power"></div><div data-live="override"></div><div data-live="alarms"></div>
       ${this.sec("Probes", this.btn("goto", "Manage", { to: "probes" }, "link"))}
       <div class="grid g4">${probes || this.empty("mdi:thermometer-plus", "No probes yet", "Add temperature and pH from any controller — GHL, HYDROS, Apex.", this.btn("goto", "Add a probe", { to: "probes", kind: "probe", n: "new" }, "primary"))}</div>
+      ${this.alkOverview()}
       ${this.sec("Feed & maintenance", M ? `<span class="sbtns">${this.btn("goto", "Edit pauses", { to: "modes" }, "link")}${this.btn("ovmanage", "Done", {}, "primary sm")}</span>` : this.btn("ovmanage", "Manage", {}, "link"))}
       ${M ? `<p class="hint">Tick the pauses to show on Overview.</p>` : ""}
       <div class="grid g4">${modes || `<p class="hint">No pauses on Overview. Tap Manage to pick some.</p>`}</div>
@@ -1198,6 +1200,7 @@ class SentinelControllerCard extends HTMLElement {
         <div class="dheads">${this.dosers().map((d) => d.pumps.map((p) => `<div class="dhead"><span class="cap">${esc(d.name)} · Pump ${p.n}</span>
           <label><span>Name</span>${this.ctl("text", this.f("setup", `doser_names.${d.device_id}.${p.n}`), ((F.doser_names || {})[d.device_id] || {})[p.n] || "", { ph: this.autoPumpName(d, p) })}</label>
           <label><span>Section</span>${this.ctl("text", this.f("setup", `doser_sections.${d.device_id}.${p.n}`), ((F.doser_sections || {})[d.device_id] || {})[p.n] || "", { ph: d.name })}</label></div>`).join("")).join("")}</div></div>` : ""}
+      ${this.alkSetup()}
       ${this.sec("Data")}<div class="card pad form">
         ${this.field("Default status sensor", this.ctl("select", this.f("setup", "data_source.entity"), ds.entity, { options: ents(["sensor", "binary_sensor"]) }), "Probes without their own status sensor use this one")}
         ${this.field("OK when state is", this.ctl("text", this.f("setup", "data_source.ok_states"), ds.ok_states, { ph: "Connected" }))}
@@ -1205,6 +1208,85 @@ class SentinelControllerCard extends HTMLElement {
       <p class="hint">Settings are stored in Home Assistant and included in its backups. Version ${VERSION}.</p>`;
   }
 }
+
+// ---------------------------------------------------------------- alkalinity advice
+Object.assign(SentinelControllerCard.prototype, {
+  alkCfg() { return { ...((this.L && this.L.alk_defaults) || {}), ...(this.cfg.alk_advisor || {}) }; },
+  alkSetup() {
+    const F = this.form("alk", ["alk_advisor"]);
+    F.alk_advisor = { ...((this.L && this.L.alk_defaults) || {}), ...(F.alk_advisor || {}) };
+    const a = F.alk_advisor, f = (k) => this.f("alk", `alk_advisor.${k}`);
+    const label = (e) => `${this.ename(e)}${this.edev(e) ? " · " + this.edev(e) : ""}`;
+    const sorted = (list) => list.sort((x, y) => label(x).localeCompare(label(y)));
+    const st = this._hass.states;
+    const dkhEnts = sorted(Object.keys(st).filter((e) => /^(sensor|input_number)\./.test(e) && !isNaN(parseFloat(st[e].state))));
+    const VOL = ["ml", "l", "fl. oz.", "fl oz", "floz", "oz", "gal"];
+    const volEnts = sorted(Object.keys(st).filter((e) => e.startsWith("sensor.") && VOL.includes(String(st[e].attributes?.unit_of_measurement || "").trim().toLowerCase())));
+    const opts = (list, none) => [["", none], ...list.map((e) => [e, label(e)])];
+    const head = `${this.sec("Alkalinity advice")}<div class="card pad form">${this.formBar("alk")}
+        ${this.field("Recommend NaOH dose changes", this.ctl("bool", f("enabled"), a.enabled, { r: 1 }), "Shows a gauge on Overview and notifies you when a new dKH reading calls for a change. It never changes the doser.")}`;
+    if (!a.enabled) return head + `</div>`;
+    return `${head}
+        <div class="lbl">Measurement</div>
+        ${this.field("dKH sensor", this.ctl("select", f("dkh_entity"), a.dkh_entity, { options: opts(dkhEnts, "— choose —") }), "Any sensor or input_number that holds your measured dKH")}
+        ${this.field("Target", this.ctl("num", f("target_dkh"), a.target_dkh, { step: 0.1, min: 0, u: "dKH" }))}
+        ${this.field("No change within", this.ctl("num", f("tolerance"), a.tolerance, { step: 0.05, min: 0, u: "± dKH" }), "When dKH is this close to target and steady, keep the dose")}
+        ${this.field("Tank water volume", `${this.ctl("num", f("tank_volume"), a.tank_volume, { step: "any", min: 0 })}${this.ctl("seg", f("volume_unit"), a.volume_unit, { options: [["gal", "gal"], ["l", "L"]] })}`, "Net water in the whole system, sump included")}
+        <div class="lbl">Sodium hydroxide (the dose that changes)</div>
+        ${this.field("NaOH container", this.ctl("select", f("naoh_entity"), a.naoh_entity, { options: opts(volEnts, "— choose —") }), "Container level sensor. Daily use is worked out from how fast it drops; refills are skipped")}
+        ${this.field("NaOH strength", this.ctl("num", f("naoh_g_per_l"), a.naoh_g_per_l, { step: "any", min: 0, u: "g/L" }), "Grams of NaOH per liter of solution. Example: 454 g (1 lb) in 3.785 L (1 gal) = 120 g/L")}
+        ${this.field("Fluoride in the solution", this.ctl("num", f("fluoride_mg_per_l"), a.fluoride_mg_per_l, { step: "any", min: 0, u: "mg/L" }), "Fluoride per liter of the NaOH solution. Shown so you see how fluoride dosing changes with the NaOH dose. 0 hides it")}
+        <div class="lbl">Kalkwasser (shown, not changed)</div>
+        ${this.field("Kalk container", this.ctl("select", f("kalk_entity"), a.kalk_entity, { options: opts(volEnts, "— none —") }))}
+        <div class="lbl">How cautious</div>
+        ${this.field("Reach target over", this.ctl("num", f("correction_days"), a.correction_days, { step: 1, min: 1, u: "days" }), "A gap to target is closed over this many days")}
+        ${this.field("Largest change at once", this.ctl("num", f("max_change_pct"), a.max_change_pct, { step: 1, min: 1, max: 100, u: "%" }), "Bigger changes are cut to this and finished after the next test")}
+        ${this.field("History used", this.ctl("num", f("window_days"), a.window_days, { step: 1, min: 1, max: 30, u: "days" }), "For the dKH trend and the daily dose")}
+        ${this.field("Notify", this.ctl("bool", f("notify"), a.notify), "Sends to the 'Send to' list on the Alerts tab")}</div>`;
+  },
+  alkOverview() {
+    if (!this.alkCfg().enabled) return "";
+    return `${this.sec("Alkalinity advice", this.btn("goto", "Settings", { to: "setup" }, "link"))}<div class="card alk" data-live="alk"></div>`;
+  },
+  // Half-circle gauge: dKH against target, green band = no-change zone, amber band = ±1 dKH.
+  alkGauge(v, target, tol) {
+    const span = 2, lo = target - span, hi = target + span;
+    const fr = (x) => Math.max(0, Math.min(1, (x - lo) / (hi - lo)));
+    const pt = (f, r) => { const t = Math.PI * (1 - f); return [70 + r * Math.cos(t), 70 - r * Math.sin(t)]; };
+    const arc = (f1, f2, color, w = 12) => { const [x1, y1] = pt(f1, 56), [x2, y2] = pt(f2, 56); return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)} A56 56 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" stroke="${color}" stroke-width="${w}" fill="none"/>`; };
+    const needle = v == null ? "" : (() => { const [x, y] = pt(fr(v), 50); return `<line x1="70" y1="70" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--tx)" stroke-width="3" stroke-linecap="round"/><circle cx="70" cy="70" r="5" fill="var(--tx)"/>`; })();
+    return `<svg viewBox="0 0 140 84" class="gauge" role="img" aria-label="dKH ${v == null ? "unknown" : fmt(v)} against target ${fmt(target)}">
+      ${arc(0, 1, "var(--badb)")}${arc(fr(target - 1), fr(target + 1), "var(--warnb)")}${arc(fr(target - tol), fr(target + tol), "var(--ok)")}
+      ${needle}<text x="8" y="82" font-size="9" fill="var(--sec)">${fmt(lo, 1)}</text><text x="132" y="82" font-size="9" fill="var(--sec)" text-anchor="end">${fmt(hi, 1)}</text></svg>`;
+  },
+  // Bar from -max % to +max % with a marker at the recommended change.
+  alkChangeBar(pct, max) {
+    const f = Math.max(0, Math.min(1, ((pct || 0) + max) / (2 * max)));
+    const cls = Math.abs(pct || 0) < 0.5 ? "hold" : pct > 0 ? "up" : "down";
+    const fill = cls === "hold" ? "" : pct > 0 ? `<i class="fill up" style="left:50%;width:${((f - 0.5) * 100).toFixed(1)}%"></i>` : `<i class="fill down" style="left:${(f * 100).toFixed(1)}%;width:${((0.5 - f) * 100).toFixed(1)}%"></i>`;
+    return `<div class="chg ${cls}" aria-hidden="true"><b class="mid"></b>${fill}<span class="dot" style="left:${(f * 100).toFixed(1)}%"></span></div><div class="chgx"><span>−${fmt(max, 0)}%</span><span>no change</span><span>+${fmt(max, 0)}%</span></div>`;
+  },
+  alkLive() {
+    const a = this.st(["alk_advice"], {}) || {}; const c = this.alkCfg();
+    const target = Number(a.target ?? c.target_dkh), tol = Number(a.tolerance ?? c.tolerance), max = Number(a.max_change_pct ?? c.max_change_pct);
+    if (!a.state) return `<p class="hint">Working out the first recommendation…</p>`;
+    if (a.state === "setup") return `<div class="note warn">${this.icon("mdi:cog-outline")}<span>${esc(a.text)}</span>${this.btn("goto", "Open Setup", { to: "setup" }, "link")}</div>`;
+    const when = a.dkh_at ? new Date(a.dkh_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    const trend = a.slope == null ? "Trend: needs readings over 12 h" : `Trend ${a.slope >= 0 ? "+" : ""}${fmt(a.slope, 2)} dKH/day`;
+    const head = { raise: ["warn", "mdi:arrow-up-bold", "Raise NaOH"], lower: ["warn", "mdi:arrow-down-bold", "Lower NaOH"], hold: ["ok", "mdi:check-circle", "Keep NaOH as is"], no_data: ["", "mdi:information-outline", "Waiting for data"] }[a.state] || ["", "mdi:information-outline", ""];
+    const dose = a.naoh_now == null ? "" : a.state === "raise" || a.state === "lower"
+      ? `<div class="dose"><span class="muted">NaOH</span><b>${fmt(a.naoh_now, 0)}</b><span class="muted">→</span><b class="${head[0]}c">${fmt(a.naoh_new, 0)}</b><span class="muted">mL/day</span><span class="chip ${head[0]}">${a.change_pct >= 0 ? "+" : ""}${fmt(a.change_pct, 0)}%</span></div>`
+      : `<div class="dose"><span class="muted">NaOH</span><b>${fmt(a.naoh_now, 0)}</b><span class="muted">mL/day</span></div>`;
+    const fl = a.fluoride ? `<div class="kv">${this.icon("mdi:flask-outline")}<span>Fluoride ${fmt(a.fluoride.mg_day_now, 1)}${Math.abs(a.fluoride.mg_day_new - a.fluoride.mg_day_now) > 0.05 ? ` → <b>${fmt(a.fluoride.mg_day_new, 1)}</b>` : ""} mg/day <span class="muted">(${fmt(a.fluoride.ppm_day_new * 1000, 2)} ppb/day in the tank)</span></span></div>` : "";
+    const kalk = a.kalk_now != null ? `<div class="kv">${this.icon("mdi:beaker-outline")}<span>Kalkwasser ${fmt(a.kalk_now, 0)} mL/day <span class="muted">(not changed)</span></span></div>` : "";
+    return `<div class="alkgrid">
+      <div class="g">${this.alkGauge(a.dkh, target, tol)}<div class="gv"><b>${a.dkh == null ? "—" : fmt(a.dkh, 2)}</b><span>dKH</span></div><small class="muted">target ${fmt(target)} ± ${fmt(tol)}</small></div>
+      <div class="r"><div class="ah ${head[0]}c">${this.icon(head[1])}<b>${esc(head[2])}</b></div>
+        ${a.state === "no_data" ? `<p class="hint">${esc(a.text)}</p>` : `${dose}${this.alkChangeBar(a.change_pct, max)}${a.capped ? `<p class="hint">Limited to ${fmt(max, 0)}% — test again before changing more.</p>` : ""}`}
+        <div class="kv">${this.icon("mdi:chart-line")}<span>${esc(trend)}${when ? ` · last test ${esc(when)}` : ""}</span></div>${fl}${kalk}
+        <p class="hint">Change the doser yourself; Sentinel Controller only recommends.</p></div></div>`;
+  },
+});
 
 const STYLE = `<style>
 :host{--bg:#e9eef3;--card:#fff;--bd:#d8e1ea;--tx:#12324a;--mu:#8aa0b2;--sec:#4a6378;--ac:#0069b4;--ok:#2fa84f;--okb:#e5f5ea;--off:#9aabb9;--offb:#eef2f6;--bad:#d64545;--badb:#fdecec;--warn:#b26d00;--warnb:#fdf3e1;--infob:#e6f2fb;
@@ -1245,7 +1327,14 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .warnc,.badc{display:flex;align-items:center;gap:3px}.warnc{color:var(--warn)!important}.badc{color:var(--bad)!important}.warnc ha-icon,.badc ha-icon{--mdc-icon-size:14px}
 .mode{padding:12px 14px;display:flex;flex-direction:column;gap:8px}.mode.dim{opacity:.5}.mode.dim:focus-within{opacity:.8}
 .ck{border:0;background:none;padding:0;margin:0;cursor:pointer;color:var(--sec);display:inline-flex}.ck.on{color:var(--ac)}.ck ha-icon{--mdc-icon-size:22px}
-.sbtns{display:inline-flex;gap:10px;align-items:center}.holds{display:flex;flex-direction:column;gap:6px}.holds .grow{flex:1;min-width:120px}.mh{display:flex;align-items:center;gap:8px}.mh b{flex:1}.mh>ha-icon{color:var(--ac)}
+.sbtns{display:inline-flex;gap:10px;align-items:center}
+.alk{padding:14px}.alkgrid{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:18px;align-items:center}@media(max-width:560px){.alkgrid{grid-template-columns:1fr}}
+.alk .g{display:flex;flex-direction:column;align-items:center;position:relative}.alk .gauge{width:100%;max-width:220px}.alk .gv{margin-top:2px;display:flex;align-items:baseline;gap:4px}.alk .gv b{font-size:26px}
+.alk .r{display:flex;flex-direction:column;gap:8px;min-width:0}.alk .ah{display:flex;align-items:center;gap:6px;font-size:16px}
+.alk .dose{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}.alk .dose b{font-size:22px}.alk .kv{display:flex;gap:6px;align-items:flex-start;font-size:13px;color:var(--sec)}.alk .kv ha-icon{--mdc-icon-size:16px}
+.chg{position:relative;height:10px;border-radius:5px;background:var(--offb);margin-top:4px}.chg .mid{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--off)}
+.chg .fill{position:absolute;top:0;bottom:0;border-radius:5px;background:var(--warn);opacity:.55}.chg .dot{position:absolute;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:var(--ac);border:2px solid #fff;box-shadow:var(--sh)}
+.chg.hold .dot{background:var(--ok)}.chgx{display:flex;justify-content:space-between;font-size:11px;color:var(--sec)}.holds{display:flex;flex-direction:column;gap:6px}.holds .grow{flex:1;min-width:120px}.mh{display:flex;align-items:center;gap:8px}.mh b{flex:1}.mh>ha-icon{color:var(--ac)}
 .mode-st{display:flex;align-items:baseline;gap:6px;min-height:28px}.cd{font-size:24px;font-weight:700;color:var(--ac)}
 .prog{height:6px;border-radius:3px;background:var(--offb);overflow:hidden;margin:6px 0 10px}.prog i{display:block;height:100%;background:var(--ac);transition:width 1s linear}
 .mode [data-live] .btn{width:100%;justify-content:center}

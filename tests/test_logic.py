@@ -351,3 +351,55 @@ def test_feed_pause_holds_outlets_on_top_of_their_function():
 def test_old_saved_feed_pauses_get_empty_sockets():
     cfg = logic.merge_config({"feed_pauses": [{"n": 1, "name": "Feed", "minutes": 3, "filter_off": True, "timer": 0}]})
     assert cfg["feed_pauses"][0]["sockets"] == [] and cfg["feed_pauses"][0]["name"] == "Feed"
+
+
+# ---------------- alkalinity advice
+_pa = pathlib.Path(__file__).parents[1] / "custom_components" / "sentinel_controller" / "advisor.py"
+_sa = importlib.util.spec_from_file_location("advisor", _pa)
+advisor = importlib.util.module_from_spec(_sa); _sa.loader.exec_module(advisor)
+
+ADV = {"dkh_entity": "sensor.dkh", "target_dkh": 8.0, "tank_volume": 100, "volume_unit": "gal",
+       "naoh_entity": "sensor.naoh", "naoh_g_per_l": 40.0, "fluoride_mg_per_l": 500}
+
+
+def _naoh(ml_per_day, days=7, start=2000.0, refill_day=None):
+    pts, v = [], start
+    for h in range(days * 24 + 1):
+        if refill_day is not None and h == refill_day * 24:
+            v += 1500
+        pts.append((T0 - timedelta(hours=days * 24 - h), v))
+        v -= ml_per_day / 24
+    return pts
+
+
+def test_daily_use_skips_refills_and_noise():
+    assert abs(advisor.daily_use_ml(_naoh(240, refill_day=3)) - 240) < 2  # the refill hour is unseen
+    noisy = [(t, v + (3 if i % 2 else -3)) for i, (t, v) in enumerate(_naoh(240))]
+    assert abs(advisor.daily_use_ml(noisy) - 240) < 3
+    assert advisor.daily_use_ml(_naoh(240)[:10]) is None  # under a day of history
+
+
+def test_advice_hold_raise_lower_cap_and_fluoride():
+    flat = [(T0 - timedelta(days=d), 8.05) for d in (3, 2, 1, 0)]
+    a = advisor.recommend(ADV, flat, _naoh(240))
+    assert a["state"] == "hold" and abs(a["naoh_new"] - 240) < 1
+    # 0.5 dKH low and steady: 100 gal = 378.5 L; need 0.5/3 dKH/day = 22.5 meq/day; 1 meq/mL -> +22.5 mL
+    low = [(T0 - timedelta(days=d), 7.5) for d in (3, 2, 1, 0)]
+    a = advisor.recommend(ADV, low, _naoh(240))
+    assert a["state"] == "raise" and abs(a["change_ml"] - 22.53) < 0.5 and not a["capped"]
+    assert abs(a["fluoride"]["mg_day_new"] - a["naoh_new"] * 0.5) < 1e-6 and "Fluoride" in a["text"]
+    # falling 0.3 dKH/day while on target: dose must rise to stop the drift; big -> capped at 15 %
+    falling = [(T0 - timedelta(days=d), 8.0 + 0.3 * d) for d in (3, 2, 1, 0)]
+    a = advisor.recommend({**ADV, "naoh_g_per_l": 10}, falling, _naoh(240))
+    assert a["state"] == "raise" and a["capped"] and abs(a["change_pct"] - 15) < 0.01
+    high = [(T0 - timedelta(days=d), 8.6) for d in (3, 2, 1, 0)]
+    assert advisor.recommend(ADV, high, _naoh(240))["state"] == "lower"
+
+
+def test_advice_setup_and_missing_data():
+    assert advisor.recommend({}, [], [])["state"] == "setup"
+    assert advisor.recommend(ADV, [], _naoh(240))["state"] == "no_data"
+    assert advisor.recommend(ADV, [(T0, 7.5)], _naoh(240, days=0))["state"] == "no_data"
+    one = advisor.recommend(ADV, [(T0, 7.5)], _naoh(240))  # one reading: no trend, gap only
+    assert one["state"] == "raise" and one["slope"] is None
+    assert abs(advisor.to_ml(10, "fl. oz.") - 295.735) < 1e-6
