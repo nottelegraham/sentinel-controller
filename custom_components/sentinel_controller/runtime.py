@@ -60,8 +60,7 @@ class Runtime:
             self.hass.async_create_task(self.async_advise())
         else:
             from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED,
-                                            lambda _e: self.hass.async_create_task(self.async_advise()))
+            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._advice_on_started)
 
     async def async_stop(self) -> None:
         if self._unsub:
@@ -219,6 +218,12 @@ class Runtime:
                                               blocking=False))
 
     # ------------------------------------------------------------------ alkalinity advice
+    @callback
+    def _advice_on_started(self, _event) -> None:
+        # @callback: runs in the event loop. A plain lambda would run in a worker thread,
+        # where hass.async_create_task isn't allowed (the first advice never ran).
+        self.hass.async_create_task(self.async_advise())
+
     @callback
     def _advice_interval(self, _now) -> None:
         self.hass.async_create_task(self.async_advise())
