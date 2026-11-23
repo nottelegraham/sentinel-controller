@@ -21,7 +21,8 @@ ML_PER_UNIT = {"ml": 1.0, "l": 1000.0, "fl. oz.": 29.5735, "fl oz": 29.5735, "fl
                "gal": 3785.41, "": 1.0}
 REFILL_ML = 50.0          # a rise bigger than this between two readings is a refill, not noise
 MIN_USE_SPAN_DAYS = 1.0   # need at least a day of container history
-MIN_TREND_SPAN_H = 12.0   # need readings spread over at least 12 h for a trend
+MIN_TREND_SPAN_H = 48.0   # a trend needs readings spread over at least 2 days...
+MIN_TREND_POINTS = 4      # ...and at least 4 of them; short, noisy runs make wild slopes
 STEADY_SLOPE = 0.1        # dKH/day: below this the trend counts as flat
 
 DEFAULTS: dict[str, Any] = {
@@ -75,7 +76,7 @@ def dkh_trend(points: list[tuple[datetime, float]]) -> tuple[float | None, float
     if not pts:
         return None, None, None
     latest_t, latest = pts[-1]
-    if len(pts) < 2 or (pts[-1][0] - pts[0][0]).total_seconds() / 3600.0 < MIN_TREND_SPAN_H:
+    if len(pts) < MIN_TREND_POINTS or (pts[-1][0] - pts[0][0]).total_seconds() / 3600.0 < MIN_TREND_SPAN_H:
         return latest, None, latest_t
     t0 = pts[0][0]
     xs = [(t - t0).total_seconds() / 86400.0 for t, _ in pts]
@@ -119,14 +120,16 @@ def recommend(cfg: dict, dkh: list[tuple[datetime, float]], naoh: list[tuple[dat
 
     target, tol = float(c["target_dkh"]), float(c["tolerance"])
     gap = target - latest
-    flat = slope is None or abs(slope) < STEADY_SLOPE
-    if abs(gap) <= tol and flat:
+    days = max(1.0, float(c["correction_days"]))
+    # Inside the no-change zone, hold unless the trend would carry dKH out of it within the correction period.
+    projected = latest + (slope or 0.0) * days
+    if abs(gap) <= tol and abs(target - projected) <= tol:
         out.update(state="hold", change_ml=0.0, change_pct=0.0, naoh_new=use, text=f"dKH {latest:.2f} is on target — keep NaOH at {use:.0f} mL/day")
         _fluoride(out, c, liters, use, use)
         return out
 
     # dKH/day the dosing must add on top of today's: stop the drift, then close the gap over N days.
-    need = -(slope or 0.0) + gap / max(1.0, float(c["correction_days"]))
+    need = -(slope or 0.0) + gap / days
     meq_per_ml = g_per_l / NAOH_G_PER_MOL
     change = need * liters / DKH_PER_MEQ / meq_per_ml
     cap = use * float(c["max_change_pct"]) / 100.0

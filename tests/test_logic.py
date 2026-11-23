@@ -403,3 +403,18 @@ def test_advice_setup_and_missing_data():
     one = advisor.recommend(ADV, [(T0, 7.5)], _naoh(240))  # one reading: no trend, gap only
     assert one["state"] == "raise" and one["slope"] is None
     assert abs(advisor.to_ml(10, "fl. oz.") - 295.735) < 1e-6
+
+
+def test_short_noisy_history_has_no_trend_and_holds_inside_band():
+    # 12 h of readings rising 7.63 -> 7.79 (the real case that gave "lower 15 %")
+    pts = [(T0 - timedelta(hours=h), 7.79 - 0.16 * h / 12) for h in (12, 10, 8, 6, 4, 2, 0)]
+    latest, slope, _ = advisor.dkh_trend(pts)
+    assert slope is None
+    a = advisor.recommend({**ADV, "tolerance": 0.5, "correction_days": 7}, pts, _naoh(120))
+    assert a["state"] == "hold"
+
+
+def test_inside_band_but_trend_heads_out_still_acts():
+    pts = [(T0 - timedelta(days=d), 8.0 + 0.15 * d) for d in (3, 2, 1, 0)]  # on target, falling 0.15/day
+    a = advisor.recommend({**ADV, "tolerance": 0.3, "correction_days": 3}, pts, _naoh(240))
+    assert a["state"] == "raise"
